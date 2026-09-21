@@ -1,0 +1,35 @@
+---
+description: Default git flow — issue branch, PR to devel, verify, then PR and merge to master
+alwaysApply: true
+---
+
+# Branch flow
+
+Feature and fix work lands on `master` only after it has been merged to `devel` and verified there.
+
+## Branches
+
+- `master` — release branch. Do not commit feature work here.
+- `devel` — integration branch. Verify here before release.
+- One branch per issue, cut from up-to-date `devel`.
+
+Name the issue branch `issue/<id>-<short-slug>` when an issue id exists. Otherwise use a short topic name with the same base and PR target (`fix/paging-search`).
+
+## Flow
+
+1. Update `devel`, then create the issue branch from it.
+2. Commit the change on that branch only.
+3. Open a pull request into `devel`. Do not open the feature PR against `master`.
+4. Merge into `devel` only after review. Verify on `devel` (CI, and the checks the change needs) before any release PR.
+5. Open a pull request from `devel` into `master`. Merge `master` only after that verification.
+
+```text
+issue/42-trend-field  →  PR  →  devel  →  verify  →  PR  →  master
+```
+
+## Do not
+
+- Commit or push feature work directly on `devel` or `master`.
+- Merge an issue branch straight into `master`.
+- Open or merge the `devel` → `master` PR before `devel` verification has finished.
+- Force-push `master` or `devel`.

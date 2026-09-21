@@ -65,6 +65,24 @@ export interface PotField {
   required: boolean;
   /** When true, JSON null is valid for this field. */
   nullable?: boolean;
+  /**
+   * Dashboard trend source. Only one 구분자 (`type`) field per pot may set this.
+   * Omitted from the public record payload.
+   */
+  trend?: boolean;
+}
+
+/** Keep at most one 구분자 field marked as the dashboard trend. */
+export function normalizePotFields(fields: PotField[]): PotField[] {
+  let used = false;
+  return fields.map((field) => {
+    const trend = field.type === 'type' && field.trend === true && !used;
+    if (trend) used = true;
+    const next: PotField = { ...field };
+    if (trend) next.trend = true;
+    else delete next.trend;
+    return next;
+  });
 }
 
 /** JSON Schema (draft-07 subset) stored per DataPot */
@@ -537,6 +555,8 @@ export interface PotTypeFieldRef {
   slug: string;
   nameKo: string;
   nameEn: string;
+  /** Saved on the field; the dashboard chart uses this column. */
+  trend?: boolean;
 }
 
 /** Daily frequency of one 구분자 value, aligned to `dates` */

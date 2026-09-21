@@ -7,6 +7,7 @@ import type {
   GridReadyEvent,
   ICellRendererParams,
   IDatasource,
+  IHeaderParams,
   PaginationChangedEvent,
   RowClickedEvent,
   SelectionChangedEvent,
@@ -192,6 +193,46 @@ function DetailValue({
 
 const PAGE_SIZE = 20;
 
+type SelectBridge = {
+  selected: number;
+  total: number;
+  busy: boolean;
+  label: string;
+  toggle: () => void;
+};
+
+function SelectAllHeader(
+  props: IHeaderParams<PotRecordDto> & { bridge: { current: SelectBridge } },
+) {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const refresh = () => bump((n) => n + 1);
+    props.api.addEventListener('selectionChanged', refresh);
+    props.api.addEventListener('modelUpdated', refresh);
+    return () => {
+      props.api.removeEventListener('selectionChanged', refresh);
+      props.api.removeEventListener('modelUpdated', refresh);
+    };
+  }, [props.api]);
+  const state = props.bridge.current;
+  const checked = state.total > 0 && state.selected >= state.total;
+  const indeterminate = state.selected > 0 && !checked;
+  return (
+    <label className="dpot-select-all">
+      <input
+        type="checkbox"
+        checked={checked}
+        ref={(el) => {
+          if (el) el.indeterminate = indeterminate;
+        }}
+        disabled={state.busy || state.total === 0}
+        aria-label={state.label}
+        onChange={() => props.bridge.current.toggle()}
+      />
+    </label>
+  );
+}
+
 type PotRecordPage = {
   total: number;
   items: PotRecordDto[];
@@ -205,6 +246,17 @@ export function PotDataPage() {
   const { locale } = useLocale();
   const [pot, setPot] = useState<DataPotDto | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [rowTotal, setRowTotal] = useState(0);
+  const [selectBusy, setSelectBusy] = useState(false);
+  const selectedRef = useRef<Set<string>>(new Set());
+  const syncingRef = useRef(false);
+  const selectBridge = useRef<SelectBridge>({
+    selected: 0,
+    total: 0,
+    busy: false,
+    label: '',
+    toggle: () => undefined,
+  });
   const [deleting, setDeleting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [detail, setDetail] = useState<PotRecordDto | null>(null);
@@ -231,7 +283,9 @@ export function PotDataPage() {
     searchRef.current = '';
     setSearchDraft('');
     setQuickFilter('');
+    selectedRef.current = new Set();
     setSelectedIds([]);
+    setRowTotal(0);
     setDetail(null);
     loadPot().catch((e) => toast.push('error', e.message));
   }, [loadPot, toast]);
@@ -257,6 +311,7 @@ export function PotDataPage() {
         }
         void api<PotRecordPage>(`/datapots/${id}/records?${qs}`)
           .then((page) => {
+            setRowTotal(page.total);
             params.successCallback(page.items, page.total);
           })
           .catch((err) => {
@@ -330,10 +385,72 @@ export function PotDataPage() {
     ];
   }, [pot?.fields, t, locale]);
 
-  function onSelectionChanged(e: SelectionChangedEvent<PotRecordDto>) {
-    const selected = e.api.getSelectedRows();
-    setSelectedIds(selected.map((r) => r.id).filter(Boolean));
+  function syncVisibleSelection(api: GridApi<PotRecordDto>) {
+    syncingRef.current = true;
+    api.forEachNode((node) => {
+      const rowId = node.data?.id;
+      if (!rowId) return;
+      const want = selectedRef.current.has(rowId);
+      if (node.isSelected() !== want) node.setSelected(want);
+    });
+    syncingRef.current = false;
   }
+
+  function onSelectionChanged(e: SelectionChangedEvent<PotRecordDto>) {
+    if (syncingRef.current) return;
+    e.api.forEachNode((node) => {
+      const rowId = node.data?.id;
+      if (!rowId) return;
+      if (node.isSelected()) selectedRef.current.add(rowId);
+      else selectedRef.current.delete(rowId);
+    });
+    setSelectedIds([...selectedRef.current]);
+  }
+
+  async function toggleSelectAll() {
+    const grid = gridApiRef.current;
+    if (rowTotal > 0 && selectedRef.current.size >= rowTotal) {
+      selectedRef.current = new Set();
+      setSelectedIds([]);
+      grid?.deselectAll();
+      grid?.refreshHeader();
+      return;
+    }
+    if (!id) return;
+    setSelectBusy(true);
+    try {
+      const qs = new URLSearchParams();
+      const q = searchRef.current.trim();
+      if (q) qs.set('q', q);
+      const suffix = qs.toString();
+      const res = await api<{ ids: string[] }>(
+        `/datapots/${id}/records/ids${suffix ? `?${suffix}` : ''}`,
+      );
+      selectedRef.current = new Set(res.ids.filter(Boolean));
+      setSelectedIds([...selectedRef.current]);
+      if (grid) syncVisibleSelection(grid);
+      grid?.refreshHeader();
+    } catch (err) {
+      toast.push('error', err instanceof Error ? err.message : t('potData.deleteFail'));
+    } finally {
+      setSelectBusy(false);
+      gridApiRef.current?.refreshHeader();
+    }
+  }
+
+  useEffect(() => {
+    gridApiRef.current?.refreshHeader();
+  }, [rowTotal, selectedIds.length, selectBusy]);
+
+  selectBridge.current = {
+    selected: selectedIds.length,
+    total: rowTotal,
+    busy: selectBusy,
+    label: t('potData.selectAll'),
+    toggle: () => {
+      void toggleSelectAll();
+    },
+  };
 
   function onRowClicked(e: RowClickedEvent<PotRecordDto>) {
     const target = e.event?.target as HTMLElement | null | undefined;
@@ -368,6 +485,7 @@ export function PotDataPage() {
       setConfirmOpen(false);
       setDetail((cur) => (cur && selectedIds.includes(cur.id) ? null : cur));
       toast.push('success', t('potData.deleted', { count: res.deleted }));
+      selectedRef.current = new Set();
       setSelectedIds([]);
       gridApiRef.current?.deselectAll();
       gridApiRef.current?.purgeInfiniteCache();
@@ -379,6 +497,7 @@ export function PotDataPage() {
   }
 
   function reloadFromServer() {
+    selectedRef.current = new Set();
     setSelectedIds([]);
     const grid = gridApiRef.current;
     grid?.deselectAll();
@@ -414,6 +533,7 @@ export function PotDataPage() {
     if (size > 0 && e.api.getGridOption('cacheBlockSize') !== size) {
       e.api.setGridOption('cacheBlockSize', size);
     }
+    syncVisibleSelection(e.api);
   }
 
   return (
@@ -464,9 +584,8 @@ export function PotDataPage() {
           rowSelection={{
             mode: 'multiRow',
             checkboxes: true,
-            headerCheckbox: true,
+            headerCheckbox: false,
             enableClickSelection: false,
-            selectAll: 'currentPage',
           }}
           selectionColumnDef={{
             pinned: 'left',
@@ -474,12 +593,15 @@ export function PotDataPage() {
             maxWidth: 48,
             resizable: false,
             sortable: false,
+            headerComponent: SelectAllHeader,
+            headerComponentParams: { bridge: selectBridge },
           }}
           enableBrowserTooltips
           tooltipShowDelay={400}
           getRowId={(p) => p.data.id}
           onGridReady={onGridReady}
           onPaginationChanged={onPaginationChanged}
+          onModelUpdated={(e) => syncVisibleSelection(e.api)}
           onSelectionChanged={onSelectionChanged}
           onRowClicked={onRowClicked}
         />

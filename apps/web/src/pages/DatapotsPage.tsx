@@ -135,7 +135,7 @@ export function DatapotsPage() {
 
   function openOasDocs(pot: DataPotDto) {
     if (!pot.enabled) {
-      toast.push('error', '비활성 DATAPOT은 OpenAPI를 열 수 없습니다');
+      toast.push('error', '비활성 POT은 OpenAPI를 열 수 없습니다');
       return;
     }
     window.open(potUrl(pot, POT_OAS_PATHS.docs), '_blank', 'noopener,noreferrer');
@@ -163,7 +163,7 @@ export function DatapotsPage() {
       a.download = `datapot-backup-${stamp}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      toast.push('success', `백업 완료 (${data.pots.length}개 DATAPOT)`);
+      toast.push('success', `백업 완료 (${data.pots.length}개 POT)`);
     } catch (err) {
       toast.push('error', err instanceof Error ? err.message : '백업 실패');
     } finally {
@@ -228,7 +228,7 @@ export function DatapotsPage() {
           fields: [],
         }),
       });
-      toast.push('success', 'DATAPOT이 생성되었습니다');
+      toast.push('success', 'POT이 생성되었습니다');
       setMode(null);
       await load();
       navigate(`/datapots/${created.id}`);
@@ -370,7 +370,7 @@ export function DatapotsPage() {
 
       <Modal
         open={mode !== null}
-        title="DATAPOT 추가"
+        title="POT 추가"
         onClose={() => setMode(null)}
         width={480}
         footer={

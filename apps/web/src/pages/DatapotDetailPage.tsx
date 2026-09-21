@@ -4,6 +4,7 @@ import type { ColDef, ICellRendererParams } from 'ag-grid-community';
 import {
   POT_FIELD_TYPE_LABELS,
   slugifyFieldName,
+  normalizePotFields,
   uniqueSlug,
   type DataPotDto,
   type PotField,
@@ -244,6 +245,7 @@ export function DatapotDetailPage() {
       toast.push('error', '영문 필드명을 입력하세요');
       return;
     }
+    const previous = editingSlug ? fields.find((field) => field.slug === editingSlug) : undefined;
     const nextField: PotField = {
       slug: liveSlug,
       nameEn: nameEn.trim(),
@@ -251,6 +253,7 @@ export function DatapotDetailPage() {
       type: fieldType,
       required,
       nullable,
+      trend: fieldType === 'type' && previous?.trend === true,
     };
     let next: PotField[];
     if (mode === 'create') {
@@ -260,7 +263,7 @@ export function DatapotDetailPage() {
     } else {
       return;
     }
-    await saveFields(next);
+    await saveFields(normalizePotFields(next));
   }
 
   async function removeField(slug: string) {
