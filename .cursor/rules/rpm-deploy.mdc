@@ -1,0 +1,35 @@
+---
+description: RPM 원격 배포 — DPOT_DEPLOY_HOST 서버에서 빌드·설치. 배포 요청 시 적용
+alwaysApply: false
+---
+
+# DataPot RPM 원격 배포
+
+사용자가 **배포**, **RPM 설치**, **릴리즈**, **deploy** 등을 요청하면 이 정책을 따른다.
+
+## 대상
+
+- Host: 환경 변수 `DPOT_DEPLOY_HOST` (예: `user@build-host`) — **사설 IP를 규칙/코드에 하드코딩하지 않는다**
+- 원격 디렉터리: `DPOT_DEPLOY_DIR` (기본 `/opt/src/datapot`)
+- 빌드와 설치는 **해당 서버에서** 수행 (로컬에서 rpmbuild 하지 않음)
+- `DPOT_DEPLOY_HOST`가 없으면 배포를 진행하지 말고 사용자에게 설정을 요청한다
+
+## 절차
+
+1. 로컬에서 `DPOT_DEPLOY_HOST=… ./scripts/rpm-remote-deploy.sh` 실행
+2. 서버에서 소스 동기화(rsync) → `scripts/rpm-build.sh`로 RPM 생성 → 즉시 `rpm -Uvh` 설치
+3. **버전(Version)이 설치된 패키지와 동일**하면 **Release 번호를 +1** 한 뒤 빌드
+4. 설치 후 `systemctl daemon-reload` 및 `systemctl restart datapot` (유닛이 있을 때)
+
+## Release 증가 규칙
+
+- 비교 대상: `rpm -q --qf '%{VERSION}' datapot` vs `rpm/datapot.spec`의 `Version`
+- Version이 같으면: `Release: N%{?dist}` 의 N을 N+1로 올린 뒤 빌드
+- Version이 다르면(신규 버전): Release는 `1`부터 (spec에 명시된 값 유지 가능)
+
+## 주의
+
+- 공개 저장소 기준: `.cursor/rules/open-source.mdc` 준수 (시크릿·사설 호스트 커밋 금지)
+- `.cursor/rules/*.mdc` 정책 파일은 저장소에 **커밋**한다 (gitignore로 제외하지 않음) — 단, 내부 전용 호스트는 넣지 않는다
+- 배포 전 로컬 변경이 있으면 서버로 rsync 되는 워킹 트리 기준으로 빌드됨
+- 파괴적 git 명령(`push --force` 등)은 배포 정책과 무관하게 금지

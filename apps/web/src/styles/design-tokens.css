@@ -1,0 +1,94 @@
+/* Pexalink — Design Tokens (DataPot: deep green primary) */
+
+:root {
+  /* Primary (deep green) */
+  --primary-50: #e8f5e9;
+  --primary-100: #c8e6c9;
+  --primary-200: #a5d6a7;
+  --primary-300: #81c784;
+  --primary-400: #4caf50;
+  --primary-500: #2e7d32;
+  --primary-600: #1b5e20;
+  --primary-700: #145218;
+  --primary-800: #0f3d13;
+  --primary-900: #0a2e0e;
+
+  /* Slate (neutral) */
+  --slate-900: #0f172a;
+  --slate-800: #1e293b;
+  --slate-700: #334155;
+  --slate-600: #475569;
+  --slate-500: #64748b;
+  --slate-400: #94a3b8;
+  --slate-300: #cbd5e1;
+  --slate-200: #e2e8f0;
+  --slate-100: #f1f5f9;
+  --slate-50: #f8fafc;
+  --white: #ffffff;
+
+  /* Status */
+  --success-700: #1b5e20;
+  --success-500: #2e7d32;
+  --success-50: #e8f5e9;
+
+  --warning-700: #c77700;
+  --warning-500: #ed6c02;
+  --warning-50: #fff4e5;
+
+  --critical-700: #b71c1c;
+  --critical-500: #d32f2f;
+  --critical-50: #fdecea;
+
+  --info-700: #01579b;
+  --info-500: #0288d1;
+  --info-50: #e1f5fe;
+
+  /* AI */
+  --ai-bg: #f4f1fb;
+  --ai-bg-2: #ece5fb;
+  --ai-border: #d6ccef;
+  --ai-text: #4a3b8f;
+  --ai-accent: #6e59c9;
+
+  /* Typography */
+  --font-sans: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+
+  --text-11: 12px;
+  --text-12: 13px;
+  --text-13: 14px;
+  --text-14: 15px;
+  --text-16: 17px;
+  --text-18: 19px;
+  --text-20: 21px;
+  --text-24: 26px;
+  --text-28: 30px;
+
+  /* Spacing */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+
+  /* Radius */
+  --r-sm: 2px;
+  --r-md: 4px;
+  --r-lg: 6px;
+  --r-pill: 999px;
+
+  /* Shadows */
+  --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-2: 0 2px 8px rgba(15, 23, 42, 0.08);
+
+  /* Layout */
+  --sidebar-w: 200px;
+  --sidebar-w-collapsed: 64px;
+  --header-h: 56px;
+
+  --z-sidebar: 30;
+  --z-header: 40;
+}

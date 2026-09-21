@@ -1,0 +1,21 @@
+{
+  "name": "datapot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DataPot — schema-defined data pots with dynamic external APIs",
+  "license": "MIT",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "dev": "pnpm --parallel --filter @datapot/api --filter @datapot/web run dev",
+    "dev:api": "pnpm --filter @datapot/api run dev",
+    "dev:web": "pnpm --filter @datapot/web run dev",
+    "start": "pnpm --filter @datapot/api run start:prod",
+    "dpot": "pnpm --filter @datapot/cli run start --",
+    "lint": "pnpm -r run lint --if-present",
+    "deploy:rpm": "bash scripts/rpm-remote-deploy.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,18 @@
+[Unit]
+Description=DataPot service
+After=network.target
+
+[Service]
+Type=simple
+Environment=DPOT_DATA_DIR=/var/lib/datapot
+Environment=DPOT_WEB_PORT=8080
+Environment=DPOT_WEB_ROOT=/opt/datapot/apps/web/dist
+Environment=NODE_ENV=production
+Environment=NODE_PATH=/opt/datapot/node_modules
+WorkingDirectory=/opt/datapot
+ExecStart=/opt/datapot/runtime/bin/node /opt/datapot/apps/api/dist/main.js
+Restart=on-failure
+User=datapot
+
+[Install]
+WantedBy=multi-user.target

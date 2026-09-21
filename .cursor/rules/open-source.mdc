@@ -1,0 +1,51 @@
+---
+description: 오픈소스 공개 시 저장소에 넣을 수 있는/없는 항목 정리
+alwaysApply: true
+---
+
+# Open source — what may be in the public repo
+
+에이전트·기여자는 **공개 GitHub(또는 동등한 public remote)에 push / PR / 문서화**할 때 아래를 따른다.
+내부 전용 배포·시크릿은 커밋하지 않는다.
+
+## OK — 등록·커밋 가능
+
+- 애플리케이션 소스: `apps/`, `packages/` (시크릿·실데이터 제외)
+- OSS 문서: `README.md`, `LICENSE`, 공개용 CONTRIBUTING / SECURITY (있을 때)
+- 빌드·패키징 **템플릿**: `docker/` (예시 env만), `rpm/*.spec` (placeholder URL), `scripts/rpm-build.sh`
+- CI 워크플로: `.github/workflows/*` (토큰은 GitHub Secrets만, 파일에 하드코딩 금지)
+- Cursor 규칙 중 **정책·가이드만** 담은 `.cursor/rules/*.mdc` (호스트 IP·계정 없음)
+- `.gitignore`, `pnpm-lock.yaml`, `package.json` 등 재현용 메타데이터
+- 샘플·플레이스홀더 설정 예시 (`change-me`, `localhost`, `datapot` 데모 비번 문구 수준)
+
+## NO — 공개 저장소에 넣지 말 것
+
+- **시크릿**: `.env*`, JWT/DB 비밀번호, API 키, 인증서, `credentials*.json`
+- **런타임 데이터**: `data/`, `*.sqlite*`, 백업 JSON에 실제 수집 데이터가 들어간 파일
+- **빌드 산출물**: `dist/`, `node_modules/`, `*.rpm`, `rpm/rpmbuild/`, `rpm/stage/`
+- **내부 인프라**: 사설 IP·호스트명(`172.16.*`, 사내 DNS), VPN 전용 주소, 실제 `DPOT_DEPLOY_HOST`
+- **배포 전용 규칙**: 특정 서버가 하드코딩된 `.cursor/rules/rpm-deploy.mdc` 등  
+  → 공개 전 **삭제하거나** `DPOT_DEPLOY_HOST` env만 쓰는 일반 문서로 치환
+- **개인·고객 정보**, 사내 티켓/슬랙 덤프, 미공개 파트너 계약 내용
+- **프로덕션 설정 스냅샷** (`config.json`에 실제 DBMS URL·external NAT 등이 있는 경우)
+
+## Borderline — 공개 전 손보기
+
+| 항목 | 조치 |
+|------|------|
+| `scripts/rpm-remote-deploy.sh` | 기본 호스트를 코드에 두지 말고 env 필수화; README는 env 이름만 안내 |
+| `rpm/datapot.spec` `URL:` | 실제 공개 저장소 URL로 교체 (`example` 제거) |
+| compose `DPOT_JWT_SECRET` / admin 비번 | 예시임을 명시; 프로덕션 값 금지 |
+| 에이전트 트랜스크립트·로컬 노트 | `.cursor/` 밖 개인 경로는 커밋 대상 아님 |
+| 브랜드/로고 | 라이선스·상표 정책 확인 후 포함 |
+
+## Agent checklist (push / PR / “공개 준비”)
+
+1. `git status`에 `.env`, `data/`, `*.sqlite`, `*.rpm`이 있으면 **추가하지 않는다**
+2. diff에 사설 IP·실비밀번호·실 DB URL이 있으면 **커밋 중단** 후 제거
+3. README·이슈·PR에 내부 호스트·계정 적지 않는다
+4. 공개 remote에 올리기 전 `rpm-deploy.mdc` 등 내부 전용 규칙 정리(삭제/일반화)
+
+## Intent
+
+DataPot은 봇 수집 데이터 웨어하우스 용도(오픈소스). **제품 비전·로드맵은 README에**, **인프라 비밀은 저장소 밖**에 둔다.
