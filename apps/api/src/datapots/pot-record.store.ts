@@ -172,6 +172,84 @@ export class PotRecordStore {
     return { items: [], total: 0 };
   }
 
+  /** Every record id matching the same search as `findPage`, oldest seq first. */
+  async findIds(potId: string, q?: string): Promise<string[]> {
+    const query = q?.trim() ?? '';
+    if (this.db.storeKind === 'sql') {
+      const qb = this.db.potRecords().createQueryBuilder('r').where('r.potId = :potId', { potId });
+      if (query) {
+        const like = `%${escapeLike(query.toLowerCase())}%`;
+        const seqCast = this.db.sqlDialect === 'sqlite' ? 'CAST(r.seq AS TEXT)' : 'CAST(r.seq AS CHAR)';
+        const createdCast =
+          this.db.sqlDialect === 'sqlite' ? 'CAST(r.createdAt AS TEXT)' : 'CAST(r.createdAt AS CHAR)';
+        const confirmedCast =
+          this.db.sqlDialect === 'sqlite' ? 'CAST(r.confirmed AS TEXT)' : 'CAST(r.confirmed AS CHAR)';
+        qb.andWhere(
+          `(LOWER(r.id) LIKE :like ESCAPE '\\' OR LOWER(${seqCast}) LIKE :like ESCAPE '\\' OR LOWER(r.payload) LIKE :like ESCAPE '\\' OR LOWER(${createdCast}) LIKE :like ESCAPE '\\' OR LOWER(r.priority) LIKE :like ESCAPE '\\' OR LOWER(${confirmedCast}) LIKE :like ESCAPE '\\')`,
+          { like },
+        );
+      }
+      const rows = await qb.select('r.id', 'id').orderBy('r.seq', 'ASC').getRawMany<{ id: string }>();
+      return rows.map((row) => row.id);
+    }
+    if (this.db.storeKind === 'mongo') {
+      const col = this.db.mongoCollection('pot_records');
+      if (!query) {
+        const rows = await col.find({ potId }).project({ id: 1 }).sort({ seq: 1 }).toArray();
+        return rows.map((row) => String((row as { id?: string }).id ?? ''));
+      }
+      const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rows = await col
+        .aggregate<{ id: string }>([
+          { $match: { potId } },
+          {
+            $addFields: {
+              _search: {
+                $concat: [
+                  { $ifNull: ['$id', ''] },
+                  ' ',
+                  { $toString: { $ifNull: ['$seq', ''] } },
+                  ' ',
+                  { $toString: { $ifNull: ['$createdAt', ''] } },
+                  ' ',
+                  { $ifNull: ['$priority', ''] },
+                  ' ',
+                  { $toString: { $ifNull: ['$confirmed', false] } },
+                  ' ',
+                  {
+                    $reduce: {
+                      input: { $objectToArray: { $ifNull: ['$payload', {}] } },
+                      initialValue: '',
+                      in: {
+                        $concat: [
+                          '$$value',
+                          ' ',
+                          {
+                            $convert: {
+                              input: '$$this.v',
+                              to: 'string',
+                              onError: '',
+                              onNull: '',
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+          { $match: { _search: { $regex: escaped, $options: 'i' } } },
+          { $sort: { seq: 1 } },
+          { $project: { _id: 0, id: 1 } },
+        ])
+        .toArray();
+      return rows.map((row) => row.id);
+    }
+    return [];
+  }
+
   async insert(
     potId: string,
     payload: Record<string, unknown>,

@@ -30,6 +30,7 @@ import {
   buildPotPublicBase,
   isPotPriority,
   isValidPotKey,
+  normalizePotFields,
   normalizePotKey,
   POT_PRIORITIES,
   POT_OAS_PATHS,
@@ -82,6 +83,10 @@ class PotFieldDto {
   @IsOptional()
   @IsBoolean()
   nullable?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  trend?: boolean;
 }
 
 class CreatePotDto {
@@ -189,6 +194,7 @@ export class DatapotsController {
             slug: field.slug,
             nameKo: field.nameKo,
             nameEn: field.nameEn,
+            trend: field.trend === true,
           })),
       });
     }
@@ -356,7 +362,7 @@ export class DatapotsController {
       key,
       description: body.description,
       port: body.port,
-      fields: (body.fields as PotField[]) ?? [],
+      fields: normalizePotFields((body.fields as PotField[]) ?? []),
       enabled: body.enabled,
     });
     await this.sequences.createSequence(pot.id);
@@ -419,7 +425,7 @@ export class DatapotsController {
     if (nextKey != null) patch.key = nextKey;
     if (body.description !== undefined) patch.description = body.description;
     if (body.port != null) patch.port = body.port;
-    if (body.fields !== undefined) patch.fields = body.fields as PotField[];
+    if (body.fields !== undefined) patch.fields = normalizePotFields(body.fields as PotField[]);
 
     // key/port 변경 시에만 비활성. 이름 등은 활성 상태·다른 필드를 유지.
     if (keyChanged || portChanged) {
@@ -472,6 +478,14 @@ export class DatapotsController {
     if (!typeField) throw new BadRequestException('Select a type field');
     const trend = await this.records.typeTrendByPot(id, typeField.slug, 183);
     return { field: typeField.slug, ...trend };
+  }
+
+  @Get(':id/records/ids')
+  async listRecordIds(@Param('id') id: string, @Query('q') q?: string) {
+    const pot = await this.store.findById(id);
+    if (!pot) throw new NotFoundException('DataPot not found');
+    const ids = await this.records.findIds(id, q);
+    return { ids };
   }
 
   @Get(':id/records')
