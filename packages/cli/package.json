@@ -14,15 +14,10 @@
   "dependencies": {
     "@datapot/shared": "workspace:*",
     "bcryptjs": "^2.4.3",
-    "better-sqlite3": "^11.7.0",
-    "mongodb": "^6.12.0",
-    "mysql2": "^3.12.0",
-    "typeorm": "^0.3.20",
-    "uuid": "^11.0.3"
+    "mongodb": "^6.12.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
-    "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"

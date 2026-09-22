@@ -50,7 +50,7 @@ DataPot은 OpenClaw, Grokbot 등과 같이 시장조사·수집을 자동화하�
 - **한 번 정의, 바로 서빙** — UI에서 필드 선언 → 검증 + Create/Read API 생성
 - **엔드포인트 분리** — pot마다 포트·URL key (`/api/{key}/data`), 봇·게이트웨이에 넘기기 쉬움
 - **콘솔 운영** — 대시보드(기여 차트, 구분자 트랜드), 활성/비활성/재구동, 페이지 단위 레코드 그리드(검색, 일괄 삭제, 상세 오프캔버스), 백업/복원
-- **저장소 선택** — 데모용 SQLite, 또는 MariaDB / MongoDB
+- **저장소** — MongoDB. pot마다 레코드는 `data_raw_<key>` 컬렉션이다.
 
 ## 기능
 
@@ -89,7 +89,7 @@ datapot/
 
 ### 로컬 (single 모드)
 
-`./data` 아래 SQLite — 외부 DBMS 불필요.
+MongoDB가 필요하다. single 모드는 설정 파일 위치만 다르다.
 
 ```bash
 pnpm install
@@ -97,6 +97,8 @@ pnpm --filter @datapot/shared build
 
 DPOT_MODE=single \
 DPOT_DATA_DIR=./data \
+DPOT_DB_TYPE=mongodb \
+DPOT_DB_URL=mongodb://localhost:27017/datapot \
 DPOT_ADMIN_PASSWORD=datapot \
 pnpm --filter @datapot/api run dev
 
@@ -129,18 +131,18 @@ OpenAPI(`/openapi.json`), docs(`/docs`)를 봇에 규격으로 전달하세요.
 - 공개 `GET /api/{key}/data`는 `seq`가 작은 순으로 최대 **10,000**건입니다. 콘솔 그리드는 페이지 단위이며 이 한도에 묶이지 않습니다.
 - 우선순위(없음/낮음/보통/높음)와 검증은 관리자 전용입니다. 인덱스가 있고 JSON 백업에 포함되며, 공개 API와 OpenAPI payload에는 없습니다.
 - **null 허용**으로 저장한 필드는 JSON `null`을 받습니다. OpenAPI는 해당 속성을 `nullable`로 표시합니다. 기존 필드는 다시 저장하기 전까지 non-null입니다.
-- 레코드는 pot 내부 id에 묶입니다. 이름을 바꿔도 데이터는 유지됩니다. **key**나 **port**를 바꾸면 공개 주소가 바뀌고, 다시 활성화하기 전까지 pot은 비활성입니다.
+- 레코드는 pot 내부 id에 묶입니다. 이름을 바꿔도 데이터는 유지됩니다. **key**는 생성 후에 바꿀 수 없습니다. **port**를 바꾸면 공개 주소가 바뀌고, 다시 활성화하기 전까지 pot은 비활성입니다.
 
 ## 환경 변수
 
 | 변수 | 설명 |
 |------|------|
 | `DPOT_WEB_PORT` | 관리 웹/API 포트 (기본 `8080`) |
-| `DPOT_MODE` | `single` → 내장 SQLite |
-| `DPOT_DATA_DIR` | 설정·SQLite 디렉터리 |
+| `DPOT_MODE` | `single` 이고 `DPOT_DATA_DIR`이 없으면 `/data/config.json` |
+| `DPOT_DATA_DIR` | 설정 디렉터리 |
 | `DPOT_ADMIN_PASSWORD` | 초기 admin 비밀번호 |
-| `DPOT_DB_TYPE` | `mariadb` \| `mongodb` |
-| `DPOT_DB_URL` | 연결 URL |
+| `DPOT_DB_TYPE` | `mongodb` |
+| `DPOT_DB_URL` | MongoDB 연결 URL |
 | `DPOT_JWT_SECRET` | JWT 시크릿 (**운영에서는 반드시 변경**) |
 
 ## 라이선스

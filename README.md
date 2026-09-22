@@ -50,7 +50,7 @@ DataPot is built for workflows where agents and bots (e.g. OpenClaw, Grokbot, an
 - **Define once, serve immediately** — declare fields in the UI; DataPot generates validation and a live Create / Read API.
 - **Isolated endpoints** — each pot binds to its own port and URL key (`/api/{key}/data`), easy to give to bots and gateways.
 - **Operate from the console** — dashboard with a per-pot contribution chart and one type-field trend, enable / disable / restart, paged record grid (search, bulk delete, detail offcanvas), backup / restore.
-- **Flexible storage** — SQLite for single-node demos, or MariaDB / MongoDB for longer-lived deployments.
+- **Flexible storage** — MongoDB. Each pot keeps records in `data_raw_<key>`.
 
 ## Features
 
@@ -96,7 +96,7 @@ datapot/
 
 ### Local development (single mode)
 
-SQLite under `./data` — no external DBMS required.
+MongoDB is required. Single mode only changes where `config.json` lives.
 
 ```bash
 pnpm install
@@ -105,6 +105,8 @@ pnpm --filter @datapot/shared build
 # Terminal 1 — API
 DPOT_MODE=single \
 DPOT_DATA_DIR=./data \
+DPOT_DB_TYPE=mongodb \
+DPOT_DB_URL=mongodb://localhost:27017/datapot \
 DPOT_ADMIN_PASSWORD=datapot \
 pnpm --filter @datapot/api run dev
 
@@ -115,7 +117,7 @@ pnpm --filter @datapot/web run dev
 Or run both with:
 
 ```bash
-DPOT_MODE=single DPOT_DATA_DIR=./data DPOT_ADMIN_PASSWORD=datapot pnpm dev
+DPOT_MODE=single DPOT_DATA_DIR=./data DPOT_DB_TYPE=mongodb DPOT_DB_URL=mongodb://localhost:27017/datapot DPOT_ADMIN_PASSWORD=datapot pnpm dev
 ```
 
 | Service | URL |
@@ -141,8 +143,8 @@ GitHub Actions (`.github/workflows/docker-publish.yml`) can publish images to GH
 | Mode | How | Database |
 |------|-----|----------|
 | **Uninitialized** | No DBMS configured | None — setup UI only |
-| **Normal** | `DPOT_DB_TYPE` + `DPOT_DB_URL`, or Settings UI | MariaDB or MongoDB |
-| **Single** | `DPOT_MODE=single` or `single` process arg | SQLite in `DPOT_DATA_DIR` |
+| **Normal** | `DPOT_DB_URL`, or Settings UI | MongoDB |
+| **Single** | `DPOT_MODE=single` or `single` process arg | MongoDB. Config file is `/data/config.json` when `DPOT_DATA_DIR` is unset, otherwise under that directory |
 
 Changing DBMS connection from Settings reloads the app and requires re-login (bootstrap admin may apply when the DB is empty).
 
@@ -164,7 +166,7 @@ Also published per pot: OpenAPI (`/openapi.json`) and docs (`/docs`) — use the
 - Public `GET /api/{key}/data` returns at most **10,000** records, lowest `seq` first. The console grid is paged and is not limited to that slice.
 - Priority (none / low / medium / high) and verification are admin-only. They are indexed, included in JSON backup, and omitted from the public API and OpenAPI payload.
 - A field saved with **allow null** accepts JSON `null`. OpenAPI marks that property `nullable`. Existing fields stay non-null until you save them again.
-- Changing **key** or **port** updates the public endpoint and **disables** the pot until you enable it again.
+- **key** is fixed at creation. Changing **port** updates the public endpoint and **disables** the pot until you enable it again.
 - Configure **external host / port** in Settings so console-copied URLs match your NAT or reverse proxy.
 - Protect pot endpoints (network policy, reverse proxy, gateway) when bots run outside a trusted network.
 
@@ -185,11 +187,11 @@ dpot admin reset-password --password 'new-secret'
 | Variable | Description |
 |----------|-------------|
 | `DPOT_WEB_PORT` | Admin web + API port (default `8080`) |
-| `DPOT_MODE` | Set to `single` for embedded SQLite |
-| `DPOT_DATA_DIR` | Config + SQLite directory |
+| `DPOT_MODE` | `single` uses `/data/config.json` when `DPOT_DATA_DIR` is unset |
+| `DPOT_DATA_DIR` | Config directory |
 | `DPOT_ADMIN_PASSWORD` | Initial admin password (single / bootstrap) |
-| `DPOT_DB_TYPE` | `mariadb` \| `mongodb` |
-| `DPOT_DB_URL` | Connection URL |
+| `DPOT_DB_TYPE` | `mongodb` |
+| `DPOT_DB_URL` | MongoDB connection URL |
 | `DPOT_JWT_SECRET` | JWT signing secret (**change in production**) |
 
 ## Packaging (RPM)

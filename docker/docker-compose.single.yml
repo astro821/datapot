@@ -1,4 +1,8 @@
 services:
+  mongo:
+    image: mongo:7
+    volumes:
+      - dpot-mongo:/data/db
   datapot:
     build:
       context: ..
@@ -11,9 +15,14 @@ services:
       DPOT_MODE: single
       DPOT_ADMIN_PASSWORD: datapot
       DPOT_DATA_DIR: /data
+      DPOT_DB_TYPE: mongodb
+      DPOT_DB_URL: mongodb://mongo:27017/datapot
       DPOT_JWT_SECRET: change-me-in-production
+    depends_on:
+      - mongo
     volumes:
       - dpot-data:/data
 
 volumes:
   dpot-data:
+  dpot-mongo:

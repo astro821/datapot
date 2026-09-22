@@ -1,4 +1,4 @@
-export type DbType = 'mariadb' | 'mongodb' | 'sqlite';
+export type DbType = 'mongodb';
 
 export type RunMode = 'normal' | 'single' | 'uninitialized';
 
@@ -22,7 +22,7 @@ export interface ExternalConnection {
 
 export interface DbConfig {
   type: DbType;
-  /** Connection URL (mariadb://, mongodb://, or file path for sqlite) */
+  /** MongoDB connection URL (mongodb://) */
   url: string;
 }
 
@@ -161,22 +161,47 @@ export function slugifyFieldName(nameEn: string): string {
   return slug || 'field';
 }
 
-/**
- * Normalize DATAPOT key for URL path (/api/{key}/data).
- * Allows lowercase letters, digits, hyphen, underscore.
- */
-export function normalizePotKey(raw: string): string {
-  const key = raw
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .replace(/-{2,}/g, '-');
-  return key || 'pot';
+/** Collection that holds one pot's records. `data_raw_` + key is at most 41 characters. */
+export function recordCollectionName(key: string): string {
+  return `data_raw_${key}`;
 }
 
+/**
+ * Lowercase a pot key. Does not replace `-` or other characters.
+ * Callers reject the result when `isValidPotKey` is false.
+ */
+export function normalizePotKey(raw: string): string {
+  return raw.trim().toLowerCase();
+}
+
+/** `^[a-z][a-z0-9_]{0,31}$` */
 export function isValidPotKey(raw: string): boolean {
-  return /^[a-z0-9][a-z0-9_-]{0,62}$/.test(raw.trim().toLowerCase());
+  return /^[a-z][a-z0-9_]{0,31}$/.test(raw.trim().toLowerCase());
+}
+
+/**
+ * Turn a legacy key into a valid one for collection rename.
+ * New keys are rejected instead of rewritten; this is only for existing rows.
+ */
+export function migratePotKey(raw: string, taken: ReadonlySet<string>): string {
+  let base = raw
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_')
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  if (!/^[a-z]/.test(base)) base = `p${base}`;
+  base = base.slice(0, 32).replace(/_+$/g, '');
+  if (!isValidPotKey(base)) base = 'pot';
+  let key = base;
+  let n = 2;
+  while (taken.has(key)) {
+    const suffix = `_${n}`;
+    key = `${base.slice(0, 32 - suffix.length)}${suffix}`;
+    n += 1;
+  }
+  return key;
 }
 
 /** IPv4 (0–255 per octet) */
@@ -484,9 +509,7 @@ export interface SetupRequest {
 
 /** Example connection strings shown in Setup / Settings UI */
 export const DB_CONNECTION_EXAMPLES: Record<DbType, string> = {
-  mariadb: 'mariadb://root:password@localhost:3306/datapot',
   mongodb: 'mongodb://localhost:27017/datapot',
-  sqlite: '/var/lib/datapot/datapot.sqlite',
 };
 
 /**
