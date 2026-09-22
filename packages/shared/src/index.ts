@@ -102,15 +102,10 @@ export interface DataPotDto {
   schema: JsonSchema;
   enabled: boolean;
   /** Fixed system paths */
-  endpoints: {
-    create: string;
-    list: string;
-    get: string;
-    openapi: string;
-    docs: string;
-  };
   createdAt: string;
   updatedAt: string;
+  /** ISO UTC expiry of the pot Bearer token. Null when none is issued. */
+  apiTokenExpiresAt?: string | null;
 }
 
 /** Build external API paths for a DATAPOT key */
@@ -164,6 +159,78 @@ export function slugifyFieldName(nameEn: string): string {
 /** Collection that holds one pot's records. `data_raw_` + key is at most 41 characters. */
 export function recordCollectionName(key: string): string {
   return `data_raw_${key}`;
+}
+
+/** Split a 구분자 string on commas. Spaces stay inside each value. */
+export function splitTypeTokens(value: string): string[] {
+  return value
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+/** Stored 구분자 value. Legacy comma-separated strings become arrays on read. */
+export function normalizeTypeValue(value: unknown): string[] {
+  if (value == null || value === '') return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => splitTypeTokens(String(item)));
+  }
+  return splitTypeTokens(String(value));
+}
+
+export function normalizeTypePayload(
+  fields: PotField[],
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...payload };
+  for (const field of fields) {
+    if (field.type !== 'type') continue;
+    if (!Object.prototype.hasOwnProperty.call(next, field.slug)) continue;
+    if (next[field.slug] == null) continue;
+    next[field.slug] = normalizeTypeValue(next[field.slug]);
+  }
+  return next;
+}
+
+/** UTC instant. A bare YYYY-MM-DD is rejected. */
+export function parseUtcInstant(raw: string): Date | null {
+  const value = raw.trim();
+  if (!value || /^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** Calendar day of an instant after shifting by the UI timezone offset (minutes east of UTC). */
+export function zonedDayKey(instant: Date, offsetMinutes = 0): string {
+  const shifted = new Date(instant.getTime() + offsetMinutes * 60_000);
+  const y = shifted.getUTCFullYear();
+  const m = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(shifted.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/** Inclusive local-day window expressed as UTC instants. `dates` are local calendar days. */
+export function zonedDayRange(
+  daySpan: number,
+  offsetMinutes = 0,
+): { start: Date; end: Date; dates: string[] } {
+  const shiftedNow = new Date(Date.now() + offsetMinutes * 60_000);
+  const endShifted = new Date(shiftedNow);
+  endShifted.setUTCHours(23, 59, 59, 999);
+  const startShifted = new Date(endShifted);
+  startShifted.setUTCHours(0, 0, 0, 0);
+  startShifted.setUTCDate(startShifted.getUTCDate() - (daySpan - 1));
+  const dates: string[] = [];
+  for (let i = 0; i < daySpan; i++) {
+    const day = new Date(startShifted);
+    day.setUTCDate(startShifted.getUTCDate() + i);
+    dates.push(zonedDayKey(new Date(day.getTime() - offsetMinutes * 60_000), offsetMinutes));
+  }
+  return {
+    start: new Date(startShifted.getTime() - offsetMinutes * 60_000),
+    end: new Date(endShifted.getTime() - offsetMinutes * 60_000),
+    dates,
+  };
 }
 
 /**
@@ -340,7 +407,8 @@ export function buildJsonSchemaFromFields(fields: PotField[]): JsonSchema {
       case 'type':
         properties[key] = withNullable(
           {
-            type: 'string',
+            type: 'array',
+            items: { type: 'string' },
             description: f.nameKo || f.nameEn || '구분자',
           },
           nullable,
@@ -379,7 +447,7 @@ export function buildExamplePayloadFromFields(fields: PotField[]): Record<string
         body[key] = true;
         break;
       case 'type':
-        body[key] = 'default';
+        body[key] = ['sample'];
         break;
       case 'text':
       default:
@@ -400,11 +468,12 @@ export function buildOpenApiDocument(input: {
   fields: PotField[];
   schema?: JsonSchema;
 }): OpenApiDocument {
-  const dataSchema = toOpenApi30Schema(
+  const responseSchema = toOpenApi30Schema(
     input.schema && input.schema.type === 'object'
       ? input.schema
       : buildJsonSchemaFromFields(input.fields),
   );
+  const requestSchema = requestSchemaFromResponse(responseSchema, input.fields);
   const example = buildExamplePayloadFromFields(input.fields);
   const paths = buildPotApiPaths(input.key);
   const recordSchema = {
@@ -413,10 +482,28 @@ export function buildOpenApiDocument(input: {
       id: { type: 'string' },
       potId: { type: 'string' },
       seq: { type: 'integer', description: 'Per-pot sequence number' },
-      payload: dataSchema,
-      createdAt: { type: 'string', format: 'date-time' },
+      payload: responseSchema,
+      createdAt: { type: 'string', format: 'date-time', description: 'UTC' },
     },
   };
+  const bearer = [{ bearerAuth: [] }];
+  const unauthorized = { description: 'Bearer token missing or expired' };
+  const rangeParameters = [
+    {
+      name: 'from',
+      in: 'query',
+      required: false,
+      description: 'UTC start instant (date-time). A bare YYYY-MM-DD is rejected.',
+      schema: { type: 'string', format: 'date-time' },
+    },
+    {
+      name: 'to',
+      in: 'query',
+      required: false,
+      description: 'UTC end instant (date-time). A bare YYYY-MM-DD is rejected.',
+      schema: { type: 'string', format: 'date-time' },
+    },
+  ];
 
   return {
     openapi: '3.0.3',
@@ -426,17 +513,27 @@ export function buildOpenApiDocument(input: {
       version: '1.0.0',
     },
     servers: [{ url: input.serverUrl.replace(/\/$/, '') }],
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          description: 'Pot access token issued in the console. Default lifetime is 30 days.',
+        },
+      },
+    },
     paths: {
       [paths.collection]: {
         post: {
           summary: 'Create data',
           operationId: 'createData',
           tags: [input.name],
+          security: bearer,
           requestBody: {
             required: true,
             content: {
               'application/json': {
-                schema: dataSchema,
+                schema: requestSchema,
                 example,
               },
             },
@@ -447,12 +544,15 @@ export function buildOpenApiDocument(input: {
               content: { 'application/json': { schema: recordSchema } },
             },
             '400': { description: 'Schema validation failed' },
+            '401': unauthorized,
           },
         },
         get: {
           summary: 'List data',
           operationId: 'listData',
           tags: [input.name],
+          security: bearer,
+          parameters: rangeParameters,
           responses: {
             '200': {
               description: 'OK',
@@ -462,6 +562,8 @@ export function buildOpenApiDocument(input: {
                 },
               },
             },
+            '400': { description: 'Invalid from or to instant' },
+            '401': unauthorized,
           },
         },
       },
@@ -470,6 +572,7 @@ export function buildOpenApiDocument(input: {
           summary: 'Get data by id',
           operationId: 'getDataById',
           tags: [input.name],
+          security: bearer,
           parameters: [
             {
               name: 'id',
@@ -483,12 +586,38 @@ export function buildOpenApiDocument(input: {
               description: 'OK',
               content: { 'application/json': { schema: recordSchema } },
             },
+            '401': unauthorized,
             '404': { description: 'Not found' },
           },
         },
       },
     },
   };
+}
+
+function requestSchemaFromResponse(schema: JsonSchema, fields: PotField[]): JsonSchema {
+  if (!schema || typeof schema !== 'object') return schema;
+  const copy: Record<string, unknown> = { ...(schema as Record<string, unknown>) };
+  const properties = copy.properties;
+  if (!properties || typeof properties !== 'object') return copy;
+  const next: Record<string, unknown> = { ...(properties as Record<string, unknown>) };
+  for (const field of fields) {
+    if (field.type !== 'type') continue;
+    const current = next[field.slug];
+    const description =
+      current && typeof current === 'object' && typeof (current as { description?: string }).description === 'string'
+        ? (current as { description: string }).description
+        : field.nameKo || field.nameEn || '구분자';
+    const nullable =
+      current && typeof current === 'object' && (current as { nullable?: boolean }).nullable === true;
+    next[field.slug] = {
+      description: `${description}. 쉼표로 나눈 문자열은 배열로 저장된다.`,
+      ...(nullable ? { nullable: true } : {}),
+      oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+    };
+  }
+  copy.properties = next;
+  return copy;
 }
 
 export interface LoginRequest {

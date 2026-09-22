@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { v4 as uuid } from 'uuid';
-import { isPotPriority, type PotField, type PotPriority } from '@datapot/shared';
+import { isPotPriority, normalizeTypePayload, normalizeTypeValue, zonedDayKey, zonedDayRange, type PotField, type PotPriority } from '@datapot/shared';
 import { DatabaseService } from '../database/database.service';
 import { PotSequenceService } from './pot-sequence.service';
 import type { Collection } from 'mongodb';
@@ -31,16 +31,28 @@ export interface PotRecordPage {
 @Injectable()
 export class PotRecordStore {
   private readonly keys = new Map<string, string>();
+  private readonly fieldCache = new Map<string, PotField[]>();
 
   constructor(
     private readonly db: DatabaseService,
     private readonly sequences: PotSequenceService,
   ) {}
 
-  async findByPot(potId: string, limit = 10_000): Promise<PotRecord[]> {
+  async findByPot(
+    potId: string,
+    limit = 10_000,
+    range?: { from?: Date; to?: Date },
+  ): Promise<PotRecord[]> {
     const col = await this.collection(potId);
-    const rows = await col.find({ potId }).sort({ seq: 1 }).limit(limit).toArray();
-    return rows.map((row) => this.normalize(row as unknown as PotRecord));
+    const filter: Record<string, unknown> = { potId };
+    if (range?.from || range?.to) {
+      const createdAt: Record<string, Date> = {};
+      if (range.from) createdAt.$gte = range.from;
+      if (range.to) createdAt.$lte = range.to;
+      filter.createdAt = createdAt;
+    }
+    const rows = await col.find(filter).sort({ seq: 1 }).limit(limit).toArray();
+    return rows.map((row) => this.present(row as unknown as PotRecord, potId));
   }
 
   async findPage(potId: string, query: PotRecordPageQuery): Promise<PotRecordPage> {
@@ -54,7 +66,7 @@ export class PotRecordStore {
       const total = await col.countDocuments({ potId });
       const rows = await col.find({ potId }).sort(sortDoc).skip(offset).limit(limit).toArray();
       return {
-        items: rows.map((row) => this.normalize(row as unknown as PotRecord)),
+        items: rows.map((row) => this.present(row as unknown as PotRecord, potId)),
         total,
       };
     }
@@ -76,7 +88,7 @@ export class PotRecordStore {
         },
       ])
       .toArray();
-    const items = (result?.items ?? []).map((row) => this.normalize(row));
+    const items = (result?.items ?? []).map((row) => this.present(row, potId));
     return { items, total: result?.total?.[0]?.count ?? 0 };
   }
 
@@ -111,11 +123,13 @@ export class PotRecordStore {
     },
   ): Promise<PotRecord> {
     const seq = opts?.seq ?? (await this.sequences.nextVal(potId));
+    await this.collection(potId);
+    const fields = this.fieldCache.get(potId) ?? [];
     const record: PotRecord = {
       id: opts?.id ?? uuid(),
       potId,
       seq,
-      payload,
+      payload: normalizeTypePayload(fields, payload),
       priority: opts?.priority && isPotPriority(opts.priority) ? opts.priority : 'none',
       confirmed: opts?.confirmed === true,
       createdAt: opts?.createdAt ?? new Date(),
@@ -132,7 +146,7 @@ export class PotRecordStore {
   async findById(potId: string, id: string): Promise<PotRecord | null> {
     const col = await this.collection(potId);
     const row = await col.findOne({ id, potId });
-    return row ? this.normalize(row as unknown as PotRecord) : null;
+    return row ? this.present(row as unknown as PotRecord, potId) : null;
   }
 
   async updateFlags(
@@ -158,6 +172,7 @@ export class PotRecordStore {
   async deleteByPot(potId: string): Promise<void> {
     const key = await this.keyFor(potId);
     this.keys.delete(potId);
+    this.fieldCache.delete(potId);
     await this.db.dropRecordCollection(key);
   }
 
@@ -182,16 +197,19 @@ export class PotRecordStore {
   async findEarliestByPot(potId: string): Promise<PotRecord | null> {
     const col = await this.collection(potId);
     const row = await col.find({ potId }).sort({ createdAt: 1 }).limit(1).next();
-    return row ? this.normalize(row as unknown as PotRecord) : null;
+    return row ? this.present(row as unknown as PotRecord, potId) : null;
   }
 
   async findLatestByPot(potId: string): Promise<PotRecord | null> {
     const col = await this.collection(potId);
     const row = await col.find({ potId }).sort({ createdAt: -1 }).limit(1).next();
-    return row ? this.normalize(row as unknown as PotRecord) : null;
+    return row ? this.present(row as unknown as PotRecord, potId) : null;
   }
 
   async syncIndexes(key: string, fields: PotField[]): Promise<void> {
+    for (const [id, cached] of this.keys) {
+      if (cached === key) this.fieldCache.set(id, fields);
+    }
     await this.db.ensureRecordIndexes(key, fields);
   }
 
@@ -203,22 +221,20 @@ export class PotRecordStore {
     potId: string,
     field: string,
     daySpan = 183,
+    offsetMinutes = 0,
   ): Promise<{ dates: string[]; series: { label: string; counts: number[] }[] }> {
     if (!/^[a-z0-9_]+$/.test(field)) return { dates: [], series: [] };
-    const { start, end, dates } = this.rangeDays(daySpan);
+    const { start, end, dates } = zonedDayRange(daySpan, offsetMinutes);
     const index = new Map(dates.map((date, i) => [date, i]));
     const buckets = new Map<string, number[]>();
 
     const add = (at: Date, payload: Record<string, unknown> | null | undefined) => {
       if (at > end) return;
-      const slot = index.get(this.dayKey(at));
+      const slot = index.get(zonedDayKey(at, offsetMinutes));
       if (slot == null) return;
       const raw = payload?.[field];
       if (raw == null || raw === '') return;
-      const parts = (Array.isArray(raw) ? raw.map((item) => String(item)) : String(raw).split(','))
-        .map((part) => part.trim())
-        .filter(Boolean);
-      for (const label of parts) {
+      for (const label of normalizeTypeValue(raw)) {
         let counts = buckets.get(label);
         if (!counts) {
           counts = Array(dates.length).fill(0);
@@ -250,8 +266,9 @@ export class PotRecordStore {
   async dailyCountsByPot(
     potId: string,
     daySpan = 30,
+    offsetMinutes = 0,
   ): Promise<{ date: string; count: number }[]> {
-    const { start, end, dates } = this.rangeDays(daySpan);
+    const { start, end, dates } = zonedDayRange(daySpan, offsetMinutes);
     const buckets = new Map(dates.map((date) => [date, 0]));
     const col = await this.collection(potId);
     const rows = await col
@@ -260,7 +277,7 @@ export class PotRecordStore {
       .toArray();
     for (const row of rows) {
       const at = new Date((row as { createdAt: Date }).createdAt);
-      const key = this.dayKey(at);
+      const key = zonedDayKey(at, offsetMinutes);
       if (buckets.has(key)) buckets.set(key, (buckets.get(key) || 0) + 1);
     }
     return [...buckets.entries()].map(([date, count]) => ({ date, count }));
@@ -273,36 +290,23 @@ export class PotRecordStore {
 
   private async keyFor(potId: string): Promise<string> {
     const cached = this.keys.get(potId);
-    if (cached) return cached;
-    const pot = await this.db.mongoCollection<{ id: string; key?: string }>('datapots').findOne({
+    if (cached && this.fieldCache.has(potId)) return cached;
+    const pot = await this.db.mongoCollection<{ id: string; key?: string; fields?: PotField[] }>('datapots').findOne({
       id: potId,
     });
     const key = pot?.key?.trim() ?? '';
-    if (!key) throw new Error(`Pot not found: ${potId}`);
+    if (!pot || !key) throw new Error(`Pot not found: ${potId}`);
     this.keys.set(potId, key);
+    this.fieldCache.set(potId, Array.isArray(pot.fields) ? pot.fields : []);
     return key;
   }
 
-  private rangeDays(daySpan: number): { start: Date; end: Date; dates: string[] } {
-    const end = new Date();
-    end.setHours(23, 59, 59, 999);
-    const start = new Date(end);
-    start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() - (daySpan - 1));
-    const dates: string[] = [];
-    for (let i = 0; i < daySpan; i++) {
-      const d = new Date(start);
-      d.setDate(start.getDate() + i);
-      dates.push(this.dayKey(d));
-    }
-    return { start, end, dates };
-  }
-
-  private dayKey(d: Date): string {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
+  private present(row: PotRecord, potId: string): PotRecord {
+    const base = this.normalize(row);
+    return {
+      ...base,
+      payload: normalizeTypePayload(this.fieldCache.get(potId) ?? [], base.payload ?? {}),
+    };
   }
 
   private normalize(row: PotRecord): PotRecord {

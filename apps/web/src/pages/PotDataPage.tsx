@@ -104,7 +104,7 @@ function TagBadges({ value, nowrap = false }: { value: unknown; nowrap?: boolean
 function TypeBadgeCell(p: ICellRendererParams<PotRecordDto> & { fieldSlug: string; splitTags?: boolean }) {
   const raw = p.data?.payload?.[p.fieldSlug];
   if (raw == null || raw === '') return null;
-  if (p.splitTags) return <TagBadges value={raw} nowrap />;
+  if (Array.isArray(raw) || p.splitTags) return <TagBadges value={raw} nowrap />;
   return <Badge>{String(raw)}</Badge>;
 }
 
@@ -171,7 +171,7 @@ function DetailValue({
     return <span className="dpot-record-detail__empty">—</span>;
   }
   if (type === 'type') {
-    if (splitTags) return <TagBadges value={value} />;
+    if (Array.isArray(value) || splitTags) return <TagBadges value={value} />;
     return <Badge>{String(value)}</Badge>;
   }
   if (type === 'boolean') {

@@ -12,6 +12,8 @@ export interface DataPotRecord {
   fields: PotField[];
   schema: JsonSchema;
   enabled: boolean;
+  apiTokenHash?: string | null;
+  apiTokenExpiresAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -105,6 +107,19 @@ export class DataPotStore {
     return next;
   }
 
+  async setApiToken(id: string, hash: string, expiresAt: Date): Promise<DataPotRecord | null> {
+    const existing = await this.findById(id);
+    if (!existing) return null;
+    const next: DataPotRecord = {
+      ...existing,
+      apiTokenHash: hash,
+      apiTokenExpiresAt: expiresAt,
+      updatedAt: new Date(),
+    };
+    await this.db.mongoCollection('datapots').updateOne({ id }, { $set: next });
+    return next;
+  }
+
   async delete(id: string): Promise<boolean> {
     if (!this.db.isConnected) return false;
     const result = await this.db.mongoCollection('datapots').deleteOne({ id });
@@ -123,6 +138,7 @@ export class DataPotStore {
       key: typeof row.key === 'string' ? row.key : '',
       fields,
       schema: row.schema?.type ? row.schema : buildJsonSchemaFromFields(fields),
+      apiTokenExpiresAt: row.apiTokenExpiresAt ? new Date(row.apiTokenExpiresAt) : null,
     };
   }
 }
