@@ -97,6 +97,27 @@ export function IconCopy(p: IconProps) {
   );
 }
 
+export function IconLink(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path
+        d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L11 4.93"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L13 19.07"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
 /** Pencil / edit */
 export function IconPencil(p: IconProps) {
   return (

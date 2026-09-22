@@ -9,7 +9,7 @@ import { useToast } from '../components/Toast';
 import { Modal } from '../components/Modal';
 import { Badge } from '../components/Badge';
 import { DataGrid } from '../components/DataGrid';
-import { IconCopy } from '../components/Icons';
+import { IconLink } from '../components/Icons';
 import { notifyNavRefresh } from '../lib/datapots-nav';
 import { useT } from '../i18n';
 
@@ -104,6 +104,124 @@ function CopyField({
         </button>
       </div>
     </div>
+  );
+}
+
+type CopyTab = 'api' | 'mcp' | 'auth';
+
+function PotConnectModal({
+  pot,
+  external,
+  onClose,
+  onIssued,
+}: {
+  pot: DataPotDto;
+  external: ExternalConnection | null;
+  onClose: () => void;
+  onIssued: (expiresAt: string) => void;
+}) {
+  const toast = useToast();
+  const [tab, setTab] = useState<CopyTab>('api');
+  const [tokenDays, setTokenDays] = useState<30 | 90 | 365>(30);
+  const [issuedToken, setIssuedToken] = useState<string | null>(null);
+  const [tokenBusy, setTokenBusy] = useState(false);
+
+  function url(path?: string) {
+    return buildFullUrl(pot, path, external);
+  }
+
+  async function issueToken(e: FormEvent) {
+    e.preventDefault();
+    setTokenBusy(true);
+    setIssuedToken(null);
+    try {
+      const result = await api<{ token: string; expiresAt: string }>(`/datapots/${pot.id}/token`, {
+        method: 'POST',
+        body: JSON.stringify({ days: tokenDays }),
+      });
+      setIssuedToken(result.token);
+      onIssued(result.expiresAt);
+      toast.push('success', '토큰을 발행했습니다. 이 창을 닫으면 다시 볼 수 없습니다.');
+    } catch (err) {
+      toast.push('error', err instanceof Error ? err.message : '토큰 발행 실패');
+    } finally {
+      setTokenBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open
+      title={`연결 — ${pot.name}`}
+      onClose={onClose}
+      width={640}
+      footer={
+        <button className="dpot-btn" type="button" onClick={onClose}>
+          닫기
+        </button>
+      }
+    >
+      <div className="dpot-modal-tabs" role="tablist">
+        {(
+          [
+            ['api', 'API'],
+            ['mcp', 'MCP'],
+            ['auth', 'Authentication'],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className="dpot-modal-tabs__btn"
+            role="tab"
+            aria-selected={tab === id}
+            onClick={() => setTab(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {tab === 'api' ? (
+        <div className="dpot-copy-list" role="tabpanel">
+          <CopyField label="전체 주소 (스키마 · 호스트 · 포트 · URL)" value={url()} />
+          <CopyField label="OpenAPI (JSON)" value={url(POT_OAS_PATHS.openapi)} />
+          <CopyField label="OpenAPI Docs (Swagger UI)" value={url(POT_OAS_PATHS.docs)} />
+        </div>
+      ) : null}
+      {tab === 'mcp' ? (
+        <div className="dpot-copy-list" role="tabpanel">
+          <CopyField label="MCP (Streamable HTTP)" value={url('/mcp')} />
+          <p className="dpot-form-hint">
+            Authentication 탭에서 발행한 Bearer를 Authorization 헤더에 넣습니다.
+          </p>
+        </div>
+      ) : null}
+      {tab === 'auth' ? (
+        <form className="dpot-form-grid dpot-connect-form" role="tabpanel" onSubmit={(e) => void issueToken(e)}>
+          <label>
+            API Bearer 만료
+            <select
+              value={tokenDays}
+              onChange={(e) => setTokenDays(Number(e.target.value) as 30 | 90 | 365)}
+            >
+              <option value={30}>30일</option>
+              <option value={90}>90일</option>
+              <option value={365}>365일</option>
+            </select>
+          </label>
+          <p className="dpot-form-hint">
+            {pot.apiTokenExpiresAt
+              ? `현재 토큰 만료: ${new Date(pot.apiTokenExpiresAt).toLocaleString()}`
+              : '발행된 토큰이 없습니다.'}{' '}
+            다시 발행하면 이전 토큰은 바로 무효가 됩니다. API와 MCP가 같은 토큰을 씁니다.
+          </p>
+          <button className="dpot-btn primary" type="submit" disabled={tokenBusy}>
+            {tokenBusy ? '발행 중…' : pot.apiTokenExpiresAt ? '토큰 재발행' : '토큰 발행'}
+          </button>
+          {issuedToken ? <CopyField label="토큰 (한 번만 표시)" value={issuedToken} /> : null}
+        </form>
+      ) : null}
+    </Modal>
   );
 }
 
@@ -276,7 +394,7 @@ export function DatapotsPage() {
           p.data ? (
             <div className="dpot-url-cell">
               <IconBtn label="API 주소 복사" onClick={() => setCopyTarget(p.data!)}>
-                <IconCopy size={14} />
+                <IconLink size={14} />
               </IconBtn>
               <span className="dpot-url-cell__path">
                 {buildPotApiPaths(p.data.key).collection}
@@ -324,8 +442,6 @@ export function DatapotsPage() {
     ],
     [load, toast, external],
   );
-
-  const fullUrl = copyTarget ? potUrl(copyTarget) : '';
 
   return (
     <div className="fops-admin-page fops-admin-page--fill">
@@ -426,31 +542,26 @@ export function DatapotsPage() {
         </form>
       </Modal>
 
-      <Modal
-        open={copyTarget !== null}
-        title={`API 복사 — ${copyTarget?.name ?? ''}`}
-        onClose={() => setCopyTarget(null)}
-        width={560}
-        footer={
-          <button className="dpot-btn" type="button" onClick={() => setCopyTarget(null)}>
-            닫기
-          </button>
-        }
-      >
-        {copyTarget ? (
-          <div className="dpot-copy-list">
-            <CopyField label="전체 주소 (스키마 · 호스트 · 포트 · URL)" value={fullUrl} />
-            <CopyField
-              label="OpenAPI (JSON)"
-              value={potUrl(copyTarget, POT_OAS_PATHS.openapi)}
-            />
-            <CopyField
-              label="OpenAPI Docs (Swagger UI)"
-              value={potUrl(copyTarget, POT_OAS_PATHS.docs)}
-            />
-          </div>
-        ) : null}
-      </Modal>
+      {copyTarget ? (
+        <PotConnectModal
+          key={copyTarget.id}
+          pot={copyTarget}
+          external={external}
+          onClose={() => setCopyTarget(null)}
+          onIssued={(expiresAt) => {
+            setRows((current) =>
+              current.map((row) =>
+                row.id === copyTarget.id ? { ...row, apiTokenExpiresAt: expiresAt } : row,
+              ),
+            );
+            setCopyTarget((current) =>
+              current && current.id === copyTarget.id
+                ? { ...current, apiTokenExpiresAt: expiresAt }
+                : current,
+            );
+          }}
+        />
+      ) : null}
     </div>
   );
 }
