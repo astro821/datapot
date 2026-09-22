@@ -3,7 +3,6 @@ import { createInterface } from 'readline';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import * as bcrypt from 'bcryptjs';
-import { DataSource } from 'typeorm';
 import { MongoClient } from 'mongodb';
 import {
   APP_VERSION,
@@ -80,7 +79,15 @@ function loadConfig(): DbConfig | null {
   const path = resolveConfigPath();
   if (!existsSync(path)) return null;
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as DbConfig;
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as {
+      type?: string;
+      url?: string;
+      db?: { type?: string; url?: string };
+    };
+    const type = raw.db?.type ?? raw.type;
+    const url = raw.db?.url ?? raw.url;
+    if (type === 'mongodb' && url) return { type: 'mongodb', url };
+    return null;
   } catch {
     return null;
   }
@@ -93,56 +100,21 @@ async function resetPassword(username: string, password: string): Promise<void> 
   }
   const hash = await bcrypt.hash(password, 10);
 
-  if (cfg.type === 'mongodb') {
-    const client = new MongoClient(cfg.url);
-    await client.connect();
-    try {
-      const dbName = new URL(cfg.url).pathname.replace(/^\//, '') || 'datapot';
-      const col = client.db(dbName).collection('users');
-      const r = await col.updateOne(
-        { username },
-        { $set: { passwordHash: hash, updatedAt: new Date() } },
-      );
-      if (r.matchedCount === 0) throw new Error(`User not found: ${username}`);
-    } finally {
-      await client.close();
-    }
-    return;
+  if (cfg.type !== 'mongodb') {
+    throw new Error('Only MongoDB is supported');
   }
-
-  const ds =
-    cfg.type === 'sqlite'
-      ? new DataSource({
-          type: 'better-sqlite3',
-          database: cfg.url,
-          entities: [],
-        })
-      : (() => {
-          const u = new URL(cfg.url);
-          return new DataSource({
-            type: 'mariadb',
-            host: u.hostname,
-            port: Number(u.port || 3306),
-            username: decodeURIComponent(u.username || 'root'),
-            password: decodeURIComponent(u.password || ''),
-            database: u.pathname.replace(/^\//, '') || 'datapot',
-            entities: [],
-          });
-        })();
-
-  await ds.initialize();
+  const client = new MongoClient(cfg.url);
+  await client.connect();
   try {
-    const check: Array<{ id: string }> = await ds.query(
-      'SELECT id FROM users WHERE username = ?',
-      [username],
+    const dbName = new URL(cfg.url).pathname.replace(/^\//, '') || 'datapot';
+    const col = client.db(dbName).collection('users');
+    const r = await col.updateOne(
+      { username },
+      { $set: { passwordHash: hash, updatedAt: new Date() } },
     );
-    if (!check?.length) throw new Error(`User not found: ${username}`);
-    await ds.query(
-      'UPDATE users SET passwordHash = ?, updatedAt = CURRENT_TIMESTAMP WHERE username = ?',
-      [hash, username],
-    );
+    if (r.matchedCount === 0) throw new Error(`User not found: ${username}`);
   } finally {
-    await ds.destroy();
+    await client.close();
   }
 }
 
@@ -172,7 +144,6 @@ function prompt(question: string): Promise<string> {
 
 function maskUrl(url: string): string {
   try {
-    if (url.endsWith('.sqlite') || url.startsWith('/')) return url;
     const u = new URL(url);
     if (u.password) u.password = '****';
     return u.toString();

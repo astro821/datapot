@@ -20,7 +20,7 @@ import { notifyNavRefresh } from '../lib/datapots-nav';
 import { useT } from '../i18n';
 
 type FieldMode = 'create' | 'edit' | null;
-type PropKey = 'name' | 'key' | 'port';
+type PropKey = 'name' | 'port';
 
 const FIELD_TYPES: PotFieldType[] = ['number', 'text', 'url', 'date', 'boolean', 'type'];
 
@@ -64,7 +64,6 @@ export function DatapotDetailPage() {
   const [busy, setBusy] = useState(false);
   const [editingProp, setEditingProp] = useState<PropKey | null>(null);
   const [draftName, setDraftName] = useState('');
-  const [draftKey, setDraftKey] = useState('');
   const [draftPort, setDraftPort] = useState(9001);
   const [apiBusy, setApiBusy] = useState(false);
   const [apiMenuOpen, setApiMenuOpen] = useState(false);
@@ -105,20 +104,17 @@ export function DatapotDetailPage() {
   function startEdit(key: PropKey) {
     if (!pot) return;
     setDraftName(pot.name);
-    setDraftKey(pot.key);
     setDraftPort(pot.port);
     setEditingProp(key);
   }
 
   async function savePotPatch(
-    patch: Partial<Pick<DataPotDto, 'name' | 'key' | 'port' | 'enabled'>>,
+    patch: Partial<Pick<DataPotDto, 'name' | 'port' | 'enabled'>>,
   ) {
     if (!id || !pot) return;
     if (savingProp.current) return;
     savingProp.current = true;
-    const deactivatedByEndpoint =
-      (patch.key != null && patch.key !== pot.key) ||
-      (patch.port != null && patch.port !== pot.port);
+    const deactivatedByEndpoint = patch.port != null && patch.port !== pot.port;
     try {
       const updated = await api<DataPotDto>(`/datapots/${id}`, {
         method: 'PATCH',
@@ -145,13 +141,6 @@ export function DatapotDetailPage() {
     setEditingProp(null);
     if (!pot || !next || next === pot.name) return;
     await savePotPatch({ name: next });
-  }
-
-  async function commitKey() {
-    const next = draftKey.trim();
-    setEditingProp(null);
-    if (!pot || !next || next === pot.key) return;
-    await savePotPatch({ key: next });
   }
 
   async function commitPort() {
@@ -379,32 +368,7 @@ export function DatapotDetailPage() {
           {pot ? (
             <div className="dpot-head-port">
               <span className="dpot-head-port__label">key</span>
-              {editingProp === 'key' ? (
-                <input
-                  className="dpot-head-port__input dpot-mono"
-                  value={draftKey}
-                  autoFocus
-                  onChange={(e) => setDraftKey(e.target.value)}
-                  onBlur={() => void commitKey()}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                    if (e.key === 'Escape') setEditingProp(null);
-                  }}
-                />
-              ) : (
-                <code>{pot.key}</code>
-              )}
-              {editingProp !== 'key' ? (
-                <button
-                  type="button"
-                  className="dpot-icon-btn"
-                  aria-label="key 수정"
-                  title="key 수정"
-                  onClick={() => startEdit('key')}
-                >
-                  <IconPencil size={14} />
-                </button>
-              ) : null}
+              <code>{pot.key}</code>
             </div>
           ) : null}
           {pot ? (

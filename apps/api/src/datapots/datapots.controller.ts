@@ -241,9 +241,12 @@ export class DatapotsController {
     if (new Set(names).size !== names.length) {
       throw new BadRequestException('Backup contains duplicate pot names');
     }
-    const keys = body.pots
-      .map((p) => normalizePotKey(p.key || p.name || ''))
-      .filter(Boolean);
+    const keys = body.pots.map((p) => normalizePotKey(p.key || p.name || ''));
+    if (keys.some((key) => !isValidPotKey(key))) {
+      throw new BadRequestException(
+        'key는 소문자로 시작하고, 소문자·숫자·밑줄만 32자 이하로 써야 합니다',
+      );
+    }
     if (new Set(keys).size !== keys.length) {
       throw new BadRequestException('Backup contains duplicate pot keys');
     }
@@ -257,8 +260,15 @@ export class DatapotsController {
       const key = normalizePotKey(item.key || name);
       const fields = Array.isArray(item.fields) ? (item.fields as PotField[]) : [];
       const records = Array.isArray(item.records) ? item.records : [];
-      const existing =
-        (await this.store.findByKey(key)) || (await this.store.findByName(name));
+      const byKey = await this.store.findByKey(key);
+      const byName = await this.store.findByName(name);
+      if (byKey && byName && byKey.id !== byName.id) {
+        throw new BadRequestException(`DATAPOT key "${key}" is already in use`);
+      }
+      const existing = byKey || byName;
+      if (existing && existing.key !== key) {
+        throw new BadRequestException(`복원으로 key를 덮어쓸 수 없습니다 (${existing.key})`);
+      }
 
       let pot;
       if (existing) {
@@ -267,13 +277,8 @@ export class DatapotsController {
           const portOwner = await this.store.findByPort(item.port);
           if (!portOwner || portOwner.id === existing.id) port = item.port;
         }
-        const keyOwner = await this.store.findByKey(key);
-        if (keyOwner && keyOwner.id !== existing.id) {
-          throw new BadRequestException(`DATAPOT key "${key}" is already in use`);
-        }
         pot = await this.store.update(existing.id, {
           name,
-          key,
           description: item.description,
           port,
           fields,
@@ -315,6 +320,7 @@ export class DatapotsController {
       if (maxSeq > 0) {
         await this.sequences.setValue(pot.id, maxSeq);
       }
+      await this.records.syncIndexes(pot.key, pot.fields ?? []);
 
       await this.runtime.restartPot(pot);
     }
@@ -342,7 +348,7 @@ export class DatapotsController {
     const key = normalizePotKey(body.key);
     if (!isValidPotKey(key)) {
       throw new BadRequestException(
-        'key는 영문 소문자·숫자·하이픈·언더스코어만 사용하고, 숫자/문자로 시작해야 합니다',
+        'key는 소문자로 시작하고, 소문자·숫자·밑줄만 32자 이하로 써야 합니다',
       );
     }
     const byName = await this.store.findByName(name);
@@ -366,6 +372,7 @@ export class DatapotsController {
       enabled: body.enabled,
     });
     await this.sequences.createSequence(pot.id);
+    await this.records.syncIndexes(pot.key, pot.fields ?? []);
     if (pot.enabled) {
       await this.runtime.startPot(pot);
     }
@@ -384,18 +391,8 @@ export class DatapotsController {
         throw new BadRequestException(`DATAPOT name "${body.name.trim()}" is already in use`);
       }
     }
-    const nextKey =
-      body.key != null ? normalizePotKey(body.key) : undefined;
-    if (nextKey != null) {
-      if (!isValidPotKey(nextKey)) {
-        throw new BadRequestException(
-          'key는 영문 소문자·숫자·하이픈·언더스코어만 사용하고, 숫자/문자로 시작해야 합니다',
-        );
-      }
-      const byKey = await this.store.findByKey(nextKey);
-      if (byKey && byKey.id !== id) {
-        throw new BadRequestException(`DATAPOT key "${nextKey}" is already in use`);
-      }
+    if (body.key != null && normalizePotKey(body.key) !== existing.key) {
+      throw new BadRequestException('key는 생성 후에 바꿀 수 없습니다');
     }
     if (body.port != null) {
       const conflict = await this.store.findByPort(body.port);
@@ -410,25 +407,21 @@ export class DatapotsController {
       }
     }
 
-    const keyChanged = nextKey != null && nextKey !== existing.key;
     const portChanged = body.port != null && body.port !== existing.port;
 
     const patch: Partial<{
       name: string;
-      key: string;
       description: string;
       port: number;
       fields: PotField[];
       enabled: boolean;
     }> = {};
     if (body.name != null) patch.name = body.name;
-    if (nextKey != null) patch.key = nextKey;
     if (body.description !== undefined) patch.description = body.description;
     if (body.port != null) patch.port = body.port;
     if (body.fields !== undefined) patch.fields = normalizePotFields(body.fields as PotField[]);
 
-    // key/port 변경 시에만 비활성. 이름 등은 활성 상태·다른 필드를 유지.
-    if (keyChanged || portChanged) {
+    if (portChanged) {
       patch.enabled = false;
     } else if (body.enabled != null) {
       patch.enabled = body.enabled;
@@ -436,12 +429,12 @@ export class DatapotsController {
 
     const pot = await this.store.update(id, patch);
     if (!pot) throw new NotFoundException('DataPot not found');
+    if (body.fields !== undefined) {
+      await this.records.syncIndexes(pot.key, pot.fields ?? []);
+    }
 
     const runtimeAffecting =
-      keyChanged ||
-      portChanged ||
-      body.fields !== undefined ||
-      body.enabled != null;
+      portChanged || body.fields !== undefined || body.enabled != null;
     if (runtimeAffecting) {
       await this.runtime.restartPot(pot);
     }

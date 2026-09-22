@@ -36,7 +36,7 @@ import { DataPotStore } from '../datapots/datapot.store';
 import { UserStore } from '../users/user.store';
 
 class DbBodyDto {
-  @IsIn(['mariadb', 'mongodb', 'sqlite'])
+  @IsIn(['mongodb'])
   dbType!: DbType;
 
   @IsString()
@@ -276,9 +276,6 @@ export class SystemController {
 
   private maskUrl(url: string): string {
     try {
-      if (url.startsWith('/') || url.endsWith('.sqlite') || url.endsWith('.db')) {
-        return url;
-      }
       const u = new URL(url);
       if (u.password) u.password = '****';
       return u.toString();

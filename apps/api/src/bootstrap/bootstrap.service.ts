@@ -21,10 +21,10 @@ export interface RuntimeConfig {
 
 /** On-disk config.json shape (supports legacy flat DbConfig) */
 interface StoredConfigFile {
-  db?: DbConfig | null;
+  db?: { type?: string; url?: string } | null;
   external?: ExternalConnection | null;
-  /** legacy */
-  type?: DbConfig['type'];
+  /** legacy flat config; non-mongodb values are ignored */
+  type?: string;
   url?: string;
 }
 
@@ -77,16 +77,13 @@ export class BootstrapService {
     const stored = this.readStored(configPath);
     const envExternal = this.readExternalFromEnv();
 
-    // Env-based DB takes precedence (all types including sqlite)
-    const envType = process.env.DPOT_DB_TYPE as DbConfig['type'] | undefined;
-    const envUrl = process.env.DPOT_DB_URL;
-    if (
-      envType &&
-      envUrl &&
-      (envType === 'mariadb' || envType === 'mongodb' || envType === 'sqlite')
-    ) {
-      const db: DbConfig = { type: envType, url: envUrl };
-      this._mode = envType === 'sqlite' || isSingle ? 'single' : 'normal';
+    const envType = process.env.DPOT_DB_TYPE;
+    const envUrl = process.env.DPOT_DB_URL?.trim();
+    if (envType && envType !== 'mongodb') {
+      this.logger.error(`DPOT_DB_TYPE=${envType} is not supported. Use mongodb.`);
+    } else if (envUrl && (!envType || envType === 'mongodb')) {
+      const db: DbConfig = { type: 'mongodb', url: envUrl };
+      this._mode = isSingle ? 'single' : 'normal';
       this._config = {
         mode: this._mode,
         db,
@@ -97,13 +94,12 @@ export class BootstrapService {
         adminPasswordOverride: process.env.DPOT_ADMIN_PASSWORD,
       };
       this._ready = true;
-      this.logger.log(`DB via env: ${envType}`);
+      this.logger.log('DB via env: mongodb');
       return;
     }
 
-    if (stored.db) {
-      this._mode =
-        stored.db.type === 'sqlite' || isSingle ? 'single' : 'normal';
+    if (stored.db?.type === 'mongodb' && stored.db.url) {
+      this._mode = isSingle ? 'single' : 'normal';
       this._config = {
         mode: this._mode,
         db: stored.db,
@@ -114,11 +110,14 @@ export class BootstrapService {
         adminPasswordOverride: process.env.DPOT_ADMIN_PASSWORD,
       };
       this._ready = true;
-      this.logger.log(`Loaded DB config (${stored.db.type}) from ${configPath}`);
+      this.logger.log(`Loaded MongoDB config from ${configPath}`);
       return;
     }
 
-    // single / normal: no auto SQLite — wait for DBMS selection in Setup UI
+    if (stored.db && stored.db.type !== 'mongodb') {
+      this.logger.warn(`Ignoring stored ${stored.db.type} config. MongoDB URL is required.`);
+    }
+
     this._mode = 'uninitialized';
     this._config = {
       mode: 'uninitialized',
@@ -132,8 +131,8 @@ export class BootstrapService {
     this._ready = false;
     this.logger.warn(
       isSingle
-        ? 'Single mode without DBMS — configure MariaDB / MongoDB / SQLite in Setup'
-        : 'No DBMS configured — running in uninitialized state',
+        ? 'Single mode without MongoDB — set the URL in system settings'
+        : 'No MongoDB configured — running in uninitialized state',
     );
   }
 
@@ -145,8 +144,10 @@ export class BootstrapService {
       adminPasswordOverride,
       external,
     } = this.config;
-    this._mode =
-      db.type === 'sqlite' || preferSingleDataDir ? 'single' : 'normal';
+    if (db.type !== 'mongodb') {
+      throw new Error('Only MongoDB is supported');
+    }
+    this._mode = preferSingleDataDir ? 'single' : 'normal';
     this._config = {
       mode: this._mode,
       db,
@@ -210,12 +211,14 @@ export class BootstrapService {
     try {
       const raw = JSON.parse(readFileSync(path, 'utf8')) as StoredConfigFile;
       const external = this.normalizeExternal(raw.external);
-      if (raw.db?.type && raw.db?.url) {
-        return { db: { type: raw.db.type, url: raw.db.url }, external };
+      if (raw.db?.type === 'mongodb' && raw.db.url) {
+        return { db: { type: 'mongodb', url: raw.db.url }, external };
       }
-      // legacy flat { type, url }
-      if (raw.type && raw.url) {
-        return { db: { type: raw.type, url: raw.url }, external };
+      if (raw.type === 'mongodb' && raw.url) {
+        return { db: { type: 'mongodb', url: raw.url }, external };
+      }
+      if ((raw.db?.type && raw.db.url) || (raw.type && raw.url)) {
+        this.logger.warn('Stored DBMS config is not MongoDB and was ignored');
       }
       return { db: null, external };
     } catch {

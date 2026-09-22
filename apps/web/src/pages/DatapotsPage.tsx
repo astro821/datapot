@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type Reac
 import { Link, useNavigate } from 'react-router-dom';
 import type { ColDef, ICellRendererParams } from 'ag-grid-community';
 import type { DataPotDto, DatapotBackupFile, ExternalConnection } from '@datapot/shared';
-import { POT_OAS_PATHS, buildPotApiPaths, buildPotPublicBase, normalizePotKey } from '@datapot/shared';
+import { POT_OAS_PATHS, buildPotApiPaths, buildPotPublicBase, isValidPotKey, normalizePotKey } from '@datapot/shared';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useToast } from '../components/Toast';
@@ -210,9 +210,9 @@ export function DatapotsPage() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    const potKey = normalizePotKey(key || name);
-    if (!potKey) {
-      toast.push('error', 'key를 입력하세요');
+    const potKey = normalizePotKey(key);
+    if (!isValidPotKey(potKey)) {
+      toast.push('error', 'key는 소문자로 시작하고, 소문자·숫자·밑줄만 32자 이하로 써야 합니다');
       return;
     }
     setBusy(true);
@@ -395,12 +395,14 @@ export function DatapotsPage() {
               value={key}
               onChange={(e) => setKey(e.target.value)}
               placeholder="예: orders"
-              pattern="[A-Za-z0-9][A-Za-z0-9_-]*"
+              pattern="[a-z][a-z0-9_]{0,31}"
+              maxLength={32}
               required
             />
           </label>
           <p className="dpot-form-hint">
-            API 경로: <code>/api/{key.trim() || '{key}'}/data</code>
+            소문자로 시작, 소문자·숫자·밑줄, 32자 이하. API 경로:{' '}
+            <code>/api/{key.trim() || '{key}'}/data</code>
           </p>
           <label>
             포트
