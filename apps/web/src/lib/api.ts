@@ -1,8 +1,28 @@
 const TOKEN_KEY = 'dpot_token';
 const USER_KEY = 'dpot_user';
 
+export const SESSION_EXPIRED_EVENT = 'dpot-session-expired';
+
+function jwtExpired(token: string): boolean {
+  const part = token.split('.')[1];
+  if (!part) return true;
+  try {
+    const json = atob(part.replace(/-/g, '+').replace(/_/g, '/'));
+    const payload = JSON.parse(json) as { exp?: number };
+    return typeof payload.exp === 'number' && payload.exp * 1000 <= Date.now();
+  } catch {
+    return true;
+  }
+}
+
 export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token) return null;
+  if (jwtExpired(token)) {
+    clearSession();
+    return null;
+  }
+  return token;
 }
 
 export function setSession(token: string, user: unknown): void {
@@ -46,6 +66,10 @@ export async function api<T>(
   if (token) headers.set('Authorization', `Bearer ${token}`);
 
   const res = await fetch(`/api${path}`, { ...options, headers });
+  if (res.status === 401 && !path.startsWith('/auth/')) {
+    clearSession();
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+  }
   if (!res.ok) {
     let message = res.statusText;
     try {
