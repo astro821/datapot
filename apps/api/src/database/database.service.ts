@@ -75,6 +75,7 @@ export class DatabaseService implements OnModuleDestroy {
     const col = this.records(key);
     await col.createIndex({ id: 1 }, { unique: true, name: 'id_unique' });
     await col.createIndex({ seq: 1 }, { unique: true, name: 'seq_unique' });
+    await col.createIndex({ createdAt: 1, seq: 1 }, { name: 'createdAt_seq' });
     await col.createIndex({ priority: 1 }, { name: 'priority' });
     await col.createIndex({ confirmed: 1 }, { name: 'confirmed' });
     const wanted = new Set(

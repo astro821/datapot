@@ -323,23 +323,50 @@ export class PotRecordStore {
       if (range.to) createdAt.$lte = range.to;
       filter.createdAt = createdAt;
     }
-    const projection: Record<string, 1> = {};
-    for (const field of typeFields) projection[`payload.${field.slug}`] = 1;
-    const rows = await col.find(filter).project(projection).toArray();
     const out: Record<string, { value: string; count: number }[]> = {};
-    for (const field of typeFields) {
-      const counts = new Map<string, number>();
-      for (const row of rows) {
-        const payload = (row as { payload?: Record<string, unknown> }).payload;
-        for (const value of normalizeTypeValue(payload?.[field.slug])) {
-          counts.set(value, (counts.get(value) ?? 0) + 1);
-        }
-      }
-      out[field.slug] = [...counts.entries()]
-        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ko'))
-        .slice(0, 10)
-        .map(([value, count]) => ({ value, count }));
-    }
+    await Promise.all(
+      typeFields.map(async (field) => {
+        const path = `$payload.${field.slug}`;
+        const rows = await col
+          .aggregate<{ _id: string; count: number }>([
+            { $match: filter },
+            {
+              $project: {
+                raw: {
+                  $switch: {
+                    branches: [
+                      { case: { $isArray: path }, then: path },
+                      { case: { $eq: [{ $type: path }, 'string'] }, then: [path] },
+                    ],
+                    default: [],
+                  },
+                },
+              },
+            },
+            { $unwind: '$raw' },
+            {
+              $project: {
+                tokens: {
+                  $split: [
+                    { $convert: { input: '$raw', to: 'string', onError: '', onNull: '' } },
+                    ',',
+                  ],
+                },
+              },
+            },
+            { $unwind: '$tokens' },
+            { $project: { token: { $trim: { input: '$tokens' } } } },
+            { $match: { token: { $ne: '' } } },
+            { $group: { _id: '$token', count: { $sum: 1 } } },
+            { $sort: { count: -1, _id: 1 } },
+            { $limit: 10 },
+          ])
+          .toArray();
+        out[field.slug] = rows
+          .map((row) => ({ value: String(row._id), count: row.count }))
+          .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value, 'ko'));
+      }),
+    );
     return out;
   }
 
