@@ -953,6 +953,36 @@ body {
   gap: 20px;
 }
 
+.dpot-modal-tabs {
+  display: flex;
+  gap: 4px;
+  margin: -18px -18px 18px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--slate-200);
+}
+
+.dpot-modal-tabs__btn {
+  height: 40px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--slate-500);
+  font: inherit;
+  font-size: var(--text-13);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.dpot-modal-tabs__btn[aria-selected='true'] {
+  color: var(--primary-700);
+  border-bottom-color: var(--primary-600);
+}
+
+.dpot-connect-form {
+  max-width: none;
+}
+
 .dpot-copy-field__label {
   font-size: var(--text-13);
   font-weight: 700;

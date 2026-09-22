@@ -66,9 +66,6 @@ export function DatapotDetailPage() {
   const [editingProp, setEditingProp] = useState<PropKey | null>(null);
   const [draftName, setDraftName] = useState('');
   const [draftPort, setDraftPort] = useState(9001);
-  const [tokenDays, setTokenDays] = useState<30 | 90 | 365>(30);
-  const [issuedToken, setIssuedToken] = useState<string | null>(null);
-  const [tokenBusy, setTokenBusy] = useState(false);
   const [apiBusy, setApiBusy] = useState(false);
   const [apiMenuOpen, setApiMenuOpen] = useState(false);
   const savingProp = useRef(false);
@@ -279,6 +276,14 @@ export function DatapotDetailPage() {
       { field: 'nameEn', headerName: '필드명 (영문)', flex: 1, minWidth: 140 },
       { field: 'nameKo', headerName: '필드명 (국문)', flex: 1, minWidth: 120 },
       {
+        field: 'description',
+        headerName: '설명',
+        flex: 1.4,
+        minWidth: 160,
+        tooltipField: 'description',
+        valueFormatter: (p) => (typeof p.value === 'string' ? p.value : ''),
+      },
+      {
         field: 'type',
         headerName: '데이터 타입',
         width: 120,
@@ -468,61 +473,6 @@ export function DatapotDetailPage() {
       </div>
 
       <DataGrid rowData={fields} columnDefs={cols} getRowId={(p) => p.data.slug} />
-
-      {pot ? (
-        <form
-          className="dpot-form-grid"
-          style={{ marginTop: 16, maxWidth: 520 }}
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!id) return;
-            setTokenBusy(true);
-            setIssuedToken(null);
-            void api<{ token: string; expiresAt: string }>(`/datapots/${id}/token`, {
-              method: 'POST',
-              body: JSON.stringify({ days: tokenDays }),
-            })
-              .then((result) => {
-                setIssuedToken(result.token);
-                setPot((current) =>
-                  current ? { ...current, apiTokenExpiresAt: result.expiresAt } : current,
-                );
-                toast.push('success', '토큰을 발행했습니다. 이 화면을 닫으면 다시 볼 수 없습니다.');
-              })
-              .catch((err) => {
-                toast.push('error', err instanceof Error ? err.message : '토큰 발행 실패');
-              })
-              .finally(() => setTokenBusy(false));
-          }}
-        >
-          <label>
-            API Bearer 만료
-            <select
-              value={tokenDays}
-              onChange={(e) => setTokenDays(Number(e.target.value) as 30 | 90 | 365)}
-            >
-              <option value={30}>30일</option>
-              <option value={90}>90일</option>
-              <option value={365}>365일</option>
-            </select>
-          </label>
-          <p className="dpot-form-hint">
-            {pot.apiTokenExpiresAt
-              ? `현재 토큰 만료: ${new Date(pot.apiTokenExpiresAt).toLocaleString()}`
-              : '발행된 토큰이 없습니다.'}{' '}
-            다시 발행하면 이전 토큰은 바로 무효가 됩니다.
-          </p>
-          <button className="dpot-btn" type="submit" disabled={tokenBusy}>
-            {tokenBusy ? '발행 중…' : pot.apiTokenExpiresAt ? '토큰 재발행' : '토큰 발행'}
-          </button>
-          {issuedToken ? (
-            <label>
-              토큰 (한 번만 표시)
-              <input className="dpot-mono" readOnly value={issuedToken} />
-            </label>
-          ) : null}
-        </form>
-      ) : null}
 
       <Modal
         open={mode !== null}
