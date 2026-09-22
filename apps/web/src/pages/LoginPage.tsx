@@ -1,6 +1,6 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { DEFAULT_ADMIN_USERNAME } from '@datapot/shared';
+import { DEFAULT_ADMIN_PASSWORD, DEFAULT_ADMIN_USERNAME } from '@datapot/shared';
 import { useAuth } from '../lib/auth';
 import { useToast } from '../components/Toast';
 import { useT } from '../i18n';
@@ -11,24 +11,34 @@ import {
   AuthTextField,
 } from '../components/AuthSplitLayout';
 
+const REMEMBER_KEY = 'dpot_remember_user';
+
 export function LoginPage() {
   const t = useT();
   const { login, loginBootstrap, refreshStatus, status } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
   const dbConnected = Boolean(status?.initialized);
-  const [username, setUsername] = useState(DEFAULT_ADMIN_USERNAME);
-  const [password, setPassword] = useState(dbConnected ? 'datapot' : '');
+  const [username, setUsername] = useState(
+    () => localStorage.getItem(REMEMBER_KEY) || DEFAULT_ADMIN_USERNAME,
+  );
+  const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(() => Boolean(localStorage.getItem(REMEMBER_KEY)));
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const seeded = useRef(false);
 
   useEffect(() => {
-    if (!dbConnected) {
-      setUsername(DEFAULT_ADMIN_USERNAME);
+    if (!status || seeded.current) return;
+    seeded.current = true;
+    if (status.initialized) {
       setPassword('');
+    } else {
+      setUsername(DEFAULT_ADMIN_USERNAME);
+      setPassword(DEFAULT_ADMIN_PASSWORD);
     }
-  }, [dbConnected]);
+  }, [status]);
 
   async function onRefresh() {
     setRefreshing(true);
@@ -37,8 +47,10 @@ export function LoginPage() {
       const s = await refreshStatus();
       if (s.initialized) {
         toast.push('success', t('login.toastDbOk'));
-        setPassword('datapot');
+        setPassword('');
       } else {
+        setUsername(DEFAULT_ADMIN_USERNAME);
+        setPassword(DEFAULT_ADMIN_PASSWORD);
         toast.push('info', t('login.toastDbPending'));
       }
     } catch (err) {
@@ -73,6 +85,8 @@ export function LoginPage() {
     setError(null);
     try {
       await login(username, password);
+      if (remember) localStorage.setItem(REMEMBER_KEY, username.trim());
+      else localStorage.removeItem(REMEMBER_KEY);
       toast.push('success', t('login.toastOk'));
       navigate('/');
     } catch (err) {
@@ -83,9 +97,6 @@ export function LoginPage() {
       setBusy(false);
     }
   }
-
-  const legalConnected = t('login.legalConnected', { user: 'admin' });
-  const legalDisconnected = t('login.legalDisconnected');
 
   return (
     <AuthSplitLayout>
@@ -145,14 +156,14 @@ export function LoginPage() {
           </div>
         )}
 
-        <div className="af-legal">
-          {(dbConnected ? legalConnected : legalDisconnected).split('\n').map((line, i) => (
-            <span key={i}>
-              {i > 0 ? <br /> : null}
-              {line}
-            </span>
-          ))}
-        </div>
+        <label className="af-remember">
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(e) => setRemember(e.target.checked)}
+          />
+          {t('login.remember')}
+        </label>
       </form>
     </AuthSplitLayout>
   );
