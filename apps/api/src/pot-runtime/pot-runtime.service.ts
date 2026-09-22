@@ -82,6 +82,7 @@ export class PotRuntimeService implements OnModuleDestroy {
     await this.stopPot(pot.id);
     if (!pot.enabled) return;
 
+    await this.records.syncIndexes(pot.key, pot.fields ?? []);
     const app = this.buildApp(pot);
     const server = await new Promise<Server>((resolve, reject) => {
       const s = app.listen(pot.port, () => resolve(s));
