@@ -108,7 +108,12 @@ export interface DataPotDto {
   fields: PotField[];
   /** Generated JSON Schema for POST body validation */
   schema: JsonSchema;
+  /** Desired on/off. The port may still be closed. */
   enabled: boolean;
+  /** True only while this process is listening on `port`. */
+  listening: boolean;
+  /** Why the last bind failed. Null when listening or the pot is off. */
+  bindError: string | null;
   /** Fixed system paths */
   createdAt: string;
   updatedAt: string;
@@ -149,7 +154,7 @@ export const POT_OAS_PATHS = {
 export const DEFAULT_ADMIN_USERNAME = 'admin';
 export const DEFAULT_ADMIN_PASSWORD = 'datapot';
 export const DEFAULT_WEB_PORT = 8080;
-export const APP_VERSION = '0.1.0';
+export const APP_VERSION = '0.1.1';
 
 /**
  * Build a JSON-safe property key from an English field name.
@@ -719,6 +724,10 @@ export interface PotOverviewDto {
   key: string;
   port: number;
   enabled: boolean;
+  /** True only while this process is listening on `port`. */
+  listening: boolean;
+  /** Why the last bind failed. Null when listening or the pot is off. */
+  bindError: string | null;
   recordCount: number;
   /** Records an admin has not marked verified. */
   unverifiedCount: number;

@@ -9,6 +9,7 @@ import {
   type PotTrendDto,
 } from '@datapot/shared';
 import { api } from '../lib/api';
+import { PotStatusBadge } from '../components/PotStatusBadge';
 import { useLocale, useT } from '../i18n';
 
 const FAV_KEY = 'dpot.favorites';
@@ -651,7 +652,7 @@ export function DashboardPage() {
               <div className="dpot-overview-row" key={pot.id}>
               <article
                 className={`dpot-overview-card is-clickable${fav ? ' is-favorite' : ''}${
-                  pot.enabled ? '' : ' is-disabled'
+                  pot.listening ? '' : ' is-disabled'
                 }`}
                 role="link"
                 tabIndex={0}
@@ -670,9 +671,11 @@ export function DashboardPage() {
                     <div className="dpot-overview-card__meta">
                       <code>{pot.key}</code>
                       <span>:{pot.port}</span>
-                      {!pot.enabled ? (
-                        <span className="dpot-overview-card__off">{t('dashboard.inactive')}</span>
-                      ) : null}
+                      <PotStatusBadge
+                        enabled={pot.enabled}
+                        listening={pot.listening}
+                        bindError={pot.bindError}
+                      />
                     </div>
                   </div>
                   <div
