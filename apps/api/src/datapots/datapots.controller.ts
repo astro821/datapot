@@ -92,6 +92,10 @@ class PotFieldDto {
   nullable?: boolean;
 
   @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
   @IsBoolean()
   trend?: boolean;
 }
@@ -442,7 +446,10 @@ export class DatapotsController {
     }
 
     const runtimeAffecting =
-      portChanged || body.fields !== undefined || body.enabled != null;
+      portChanged ||
+      body.fields !== undefined ||
+      body.description !== undefined ||
+      body.enabled != null;
     if (runtimeAffecting) {
       await this.runtime.restartPot(pot);
     }
