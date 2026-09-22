@@ -195,6 +195,7 @@ export class DatapotsController {
         key: pot.key,
         port: pot.port,
         enabled: pot.enabled,
+        ...this.runtime.statusOf(pot.id),
         recordCount,
         unverifiedCount,
         firstCreatedAt: earliest?.createdAt ? earliest.createdAt.toISOString() : null,
@@ -619,6 +620,7 @@ export class DatapotsController {
       fields: p.fields ?? [],
       schema: p.schema,
       enabled: p.enabled,
+      ...this.runtime.statusOf(p.id),
       endpoints: {
         create: `${base}${apiPaths.create}`,
         list: `${base}${apiPaths.list}`,

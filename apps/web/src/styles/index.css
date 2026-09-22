@@ -1287,12 +1287,12 @@ body {
   }
 
   .dpot-overview-card {
-    grid-column: span 3;
+    grid-column: span 4;
   }
 
   .dpot-trend-slot {
     display: block;
-    grid-column: span 9;
+    grid-column: span 8;
     box-sizing: border-box;
     height: var(--dpot-card-h);
     overflow: hidden;

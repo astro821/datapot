@@ -10,6 +10,7 @@ import { Modal } from '../components/Modal';
 import { Badge } from '../components/Badge';
 import { DataGrid } from '../components/DataGrid';
 import { IconLink } from '../components/Icons';
+import { PotStatusBadge } from '../components/PotStatusBadge';
 import { notifyNavRefresh } from '../lib/datapots-nav';
 import { useT } from '../i18n';
 
@@ -17,10 +18,12 @@ type Mode = 'create' | null;
 
 function EnabledBadgeCell(p: ICellRendererParams<DataPotDto>) {
   if (!p.data) return null;
-  return p.data.enabled ? (
-    <Badge tone="success">활성</Badge>
-  ) : (
-    <Badge tone="neutral">비활성</Badge>
+  return (
+    <PotStatusBadge
+      enabled={p.data.enabled}
+      listening={p.data.listening}
+      bindError={p.data.bindError}
+    />
   );
 }
 
@@ -346,7 +349,11 @@ export function DatapotsPage() {
           fields: [],
         }),
       });
-      toast.push('success', 'POT이 생성되었습니다');
+      if (created.enabled && !created.listening) {
+        toast.push('error', created.bindError || '포트에 바인딩하지 못했습니다');
+      } else {
+        toast.push('success', 'POT이 생성되었습니다');
+      }
       setMode(null);
       await load();
       navigate(`/datapots/${created.id}`);
@@ -374,7 +381,7 @@ export function DatapotsPage() {
       {
         field: 'enabled',
         headerName: '활성',
-        width: 100,
+        width: 120,
         cellRenderer: EnabledBadgeCell,
       },
       {

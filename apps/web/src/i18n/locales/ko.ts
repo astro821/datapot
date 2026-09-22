@@ -28,6 +28,7 @@ export const ko: MessageCatalog = {
     disabled: '비활성',
     active: '활성',
     inactive: '비활성',
+    bindFailed: '바인딩 실패',
     yes: '예',
     no: '아니오',
     none: '—',

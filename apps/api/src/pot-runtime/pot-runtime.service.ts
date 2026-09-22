@@ -56,6 +56,7 @@ export class PotRuntimeService implements OnModuleDestroy {
   private readonly logger = new Logger(PotRuntimeService.name);
   private readonly servers = new Map<string, Server>();
   private readonly queryHandles = new Map<string, QueryHandle>();
+  private readonly bindErrors = new Map<string, string>();
   private readonly ajv = new Ajv({ allErrors: true, coerceTypes: false });
 
   constructor(
@@ -68,32 +69,40 @@ export class PotRuntimeService implements OnModuleDestroy {
     await this.stopAll();
   }
 
+  statusOf(potId: string): { listening: boolean; bindError: string | null } {
+    const server = this.servers.get(potId);
+    if (server?.listening) return { listening: true, bindError: null };
+    return { listening: false, bindError: this.bindErrors.get(potId) ?? null };
+  }
+
   async reloadAll(): Promise<void> {
     await this.stopAll();
+    this.bindErrors.clear();
     const all = await this.pots.findAll();
     for (const pot of all) {
-      if (pot.enabled) {
-        await this.startPot(pot);
-      }
+      if (pot.enabled) await this.startPot(pot);
     }
   }
 
   async startPot(pot: DataPotRecord): Promise<void> {
     await this.stopPot(pot.id);
+    this.bindErrors.delete(pot.id);
     if (!pot.enabled) return;
 
-    await this.records.syncIndexes(pot.key, pot.fields ?? []);
-    const app = this.buildApp(pot);
-    const server = await new Promise<Server>((resolve, reject) => {
-      const s = app.listen(pot.port, () => resolve(s));
-      s.on('error', reject);
-    }).catch((err: NodeJS.ErrnoException) => {
-      this.logger.error(`Failed to bind DataPot ${pot.name} on :${pot.port}: ${err.message}`);
-      throw err;
-    });
-
-    this.servers.set(pot.id, server);
-    this.logger.log(`DataPot "${pot.name}" listening on :${pot.port}`);
+    try {
+      await this.records.syncIndexes(pot.key, pot.fields ?? []);
+      const app = this.buildApp(pot);
+      const server = await new Promise<Server>((resolve, reject) => {
+        const s = app.listen(pot.port, () => resolve(s));
+        s.on('error', reject);
+      });
+      this.servers.set(pot.id, server);
+      this.logger.log(`DataPot "${pot.name}" listening on :${pot.port}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.bindErrors.set(pot.id, message);
+      this.logger.error(`Failed to bind DataPot ${pot.name} on :${pot.port}: ${message}`);
+    }
   }
 
   async restartPot(pot: DataPotRecord): Promise<void> {
@@ -121,14 +130,15 @@ export class PotRuntimeService implements OnModuleDestroy {
   private buildApp(pot: DataPotRecord): Express {
     const app = express();
     app.use(express.json({ limit: '2mb' }));
-    app.use((_req, res, next) => {
+    app.use((req, res, next) => {
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      if (req.method === 'OPTIONS') {
+        res.sendStatus(204);
+        return;
+      }
       next();
-    });
-    app.options('*', (_req, res) => {
-      res.sendStatus(204);
     });
     app.use(async (req, res, next) => {
       if (req.method === 'OPTIONS' || isPublicPotPath(req.path)) {

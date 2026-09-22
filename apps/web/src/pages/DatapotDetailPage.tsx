@@ -16,6 +16,7 @@ import { Modal } from '../components/Modal';
 import { Badge } from '../components/Badge';
 import { DataGrid } from '../components/DataGrid';
 import { IconPencil } from '../components/Icons';
+import { PotStatusBadge } from '../components/PotStatusBadge';
 import { notifyNavRefresh } from '../lib/datapots-nav';
 import { useT } from '../i18n';
 
@@ -124,10 +125,13 @@ export function DatapotDetailPage() {
       setPot(updated);
       setFields(updated.fields ?? []);
       notifyNavRefresh();
-      toast.push(
-        'success',
-        deactivatedByEndpoint ? t('potDetail.deactivated') : t('potDetail.saved'),
-      );
+      if (deactivatedByEndpoint) {
+        toast.push('success', t('potDetail.deactivated'));
+      } else if (updated.enabled && !updated.listening) {
+        toast.push('error', updated.bindError || t('common.bindFailed'));
+      } else {
+        toast.push('success', t('potDetail.saved'));
+      }
     } catch (err) {
       toast.push('error', err instanceof Error ? err.message : t('potDetail.saveFail'));
       await load();
@@ -166,7 +170,11 @@ export function DatapotDetailPage() {
       if (action === 'restart') {
         const updated = await api<DataPotDto>(`/datapots/${id}/restart`, { method: 'POST' });
         setPot(updated);
-        toast.push('success', t('potDetail.restartOk', { port: updated.port }));
+        if (updated.enabled && !updated.listening) {
+          toast.push('error', updated.bindError || t('common.bindFailed'));
+        } else {
+          toast.push('success', t('potDetail.restartOk', { port: updated.port }));
+        }
       } else {
         const enabled = action === 'enable';
         if (pot.enabled === enabled) {
@@ -180,7 +188,11 @@ export function DatapotDetailPage() {
         setPot(updated);
         setFields(updated.fields ?? []);
         notifyNavRefresh();
-        toast.push('success', enabled ? t('potDetail.enabledOk') : t('potDetail.disabledOk'));
+        if (enabled && !updated.listening) {
+          toast.push('error', updated.bindError || t('common.bindFailed'));
+        } else {
+          toast.push('success', enabled ? t('potDetail.enabledOk') : t('potDetail.disabledOk'));
+        }
       }
     } catch (err) {
       toast.push('error', err instanceof Error ? err.message : t('potDetail.actionFail'));
@@ -223,7 +235,11 @@ export function DatapotDetailPage() {
       setFields(updated.fields ?? []);
       notifyNavRefresh();
       setMode(null);
-      toast.push('success', '필드가 저장되었습니다');
+      if (updated.enabled && !updated.listening) {
+        toast.push('error', updated.bindError || t('common.bindFailed'));
+      } else {
+        toast.push('success', '필드가 저장되었습니다');
+      }
     } catch (err) {
       toast.push('error', err instanceof Error ? err.message : '저장 실패');
     } finally {
@@ -367,11 +383,11 @@ export function DatapotDetailPage() {
                 </button>
               ) : null}
               {pot ? (
-                pot.enabled ? (
-                  <Badge tone="success">{t('common.active')}</Badge>
-                ) : (
-                  <Badge tone="neutral">{t('common.inactive')}</Badge>
-                )
+                <PotStatusBadge
+                  enabled={pot.enabled}
+                  listening={pot.listening}
+                  bindError={pot.bindError}
+                />
               ) : null}
             </>
           )}

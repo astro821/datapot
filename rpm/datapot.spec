@@ -1,6 +1,6 @@
 Name:        datapot
-Version:     0.1.0
-Release:     4%{?dist}
+Version:     0.1.1
+Release:     1%{?dist}
 Summary:     DataPot — schema-defined data pots with dynamic external APIs
 License:     MIT
 URL:         https://github.com/astro821/datapot
@@ -28,5 +28,7 @@ install -m 0644 %{_sourcedir}/datapot.service %{buildroot}/usr/lib/systemd/syste
 systemctl daemon-reload || true
 
 %changelog
+* Tue Sep 22 2026 DataPot Maintainers - 0.1.1-1
+- Per-pot MCP tools and bearer access for the collection API
 * Mon Mar 21 2026 DataPot Maintainers - 0.1.0-1
 - Initial RPM skeleton
