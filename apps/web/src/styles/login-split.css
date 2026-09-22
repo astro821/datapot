@@ -46,98 +46,28 @@
 .ab-head-link {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   color: inherit;
   text-decoration: none;
 }
 
 .ab-mark {
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
-  background: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
-  overflow: hidden;
 }
 
 .ab-mark img {
-  width: 28px;
-  height: 28px;
+  width: 72px;
+  height: 72px;
   object-fit: contain;
 }
 
-.ab-head-text {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.2;
-}
-
 .ab-name {
-  font-size: var(--text-18);
+  font-size: 28px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-}
-
-.ab-sub {
-  font-size: var(--text-12);
-  color: rgba(255, 255, 255, 0.6);
-  font-weight: 500;
-}
-
-.ab-copy {
-  max-width: 520px;
-}
-
-.ab-eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 10px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 999px;
-  font-size: var(--text-12);
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.85);
-  letter-spacing: 0.02em;
-  margin-bottom: 20px;
-}
-
-.ab-eyebrow .dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: #81c784;
-  box-shadow: 0 0 0 3px rgba(129, 199, 132, 0.28);
-}
-
-.ab-headline {
-  font-size: 40px;
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: -0.02em;
-  margin: 0 0 16px;
-  text-wrap: balance;
-}
-
-.ab-headline em {
-  font-style: normal;
-  background: linear-gradient(90deg, #a5d6a7, #ffffff);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-.ab-tagline {
-  font-size: var(--text-16);
-  color: rgba(255, 255, 255, 0.7);
-  line-height: 1.55;
-  margin: 0;
 }
 
 .ab-foot {
@@ -147,22 +77,6 @@
   gap: 24px;
   font-size: var(--text-12);
   color: rgba(255, 255, 255, 0.55);
-}
-
-.ab-foot .links {
-  display: flex;
-  gap: 18px;
-}
-
-.ab-foot a,
-.ab-foot span {
-  color: rgba(255, 255, 255, 0.7);
-  text-decoration: none;
-}
-
-.ab-foot a:hover {
-  color: white;
-  text-decoration: underline;
 }
 
 /* RIGHT — form panel */
@@ -187,10 +101,6 @@
   .auth-brand {
     padding: 32px;
     min-height: 280px;
-  }
-
-  .ab-headline {
-    font-size: 28px;
   }
 
   .ab-foot {

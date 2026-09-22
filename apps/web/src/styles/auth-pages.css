@@ -344,6 +344,25 @@
   line-height: 1.6;
 }
 
+.auth-form .af-remember {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  margin-top: 16px;
+  font-size: var(--text-13);
+  font-weight: 600;
+  color: var(--slate-700);
+  cursor: pointer;
+}
+
+.auth-form .af-remember input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary-600);
+}
+
 .auth-form .af-legal a {
   color: var(--slate-500);
   text-decoration: none;

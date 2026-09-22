@@ -1,11 +1,20 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { createHash, timingSafeEqual } from 'crypto';
 import express, { Express, Request, Response } from 'express';
 import { Server } from 'http';
 import Ajv, { ValidateFunction } from 'ajv';
-import { buildOpenApiDocument, buildPotApiPaths, buildPotPublicBase, POT_OAS_PATHS } from '@datapot/shared';
+import {
+  buildOpenApiDocument,
+  buildPotApiPaths,
+  buildPotPublicBase,
+  normalizeTypePayload,
+  parseUtcInstant,
+  POT_OAS_PATHS,
+} from '@datapot/shared';
 import { DataPotStore, DataPotRecord } from '../datapots/datapot.store';
 import { PotRecordStore } from '../datapots/pot-record.store';
 import { BootstrapService } from '../bootstrap/bootstrap.service';
+import { dropPotHandles, mountPotMcp, type QueryHandle } from './pot-mcp';
 
 function escapeHtml(s: string): string {
   return s
@@ -46,6 +55,8 @@ function swaggerUiHtml(title: string): string {
 export class PotRuntimeService implements OnModuleDestroy {
   private readonly logger = new Logger(PotRuntimeService.name);
   private readonly servers = new Map<string, Server>();
+  private readonly queryHandles = new Map<string, QueryHandle>();
+  private readonly bindErrors = new Map<string, string>();
   private readonly ajv = new Ajv({ allErrors: true, coerceTypes: false });
 
   constructor(
@@ -58,31 +69,40 @@ export class PotRuntimeService implements OnModuleDestroy {
     await this.stopAll();
   }
 
+  statusOf(potId: string): { listening: boolean; bindError: string | null } {
+    const server = this.servers.get(potId);
+    if (server?.listening) return { listening: true, bindError: null };
+    return { listening: false, bindError: this.bindErrors.get(potId) ?? null };
+  }
+
   async reloadAll(): Promise<void> {
     await this.stopAll();
+    this.bindErrors.clear();
     const all = await this.pots.findAll();
     for (const pot of all) {
-      if (pot.enabled) {
-        await this.startPot(pot);
-      }
+      if (pot.enabled) await this.startPot(pot);
     }
   }
 
   async startPot(pot: DataPotRecord): Promise<void> {
     await this.stopPot(pot.id);
+    this.bindErrors.delete(pot.id);
     if (!pot.enabled) return;
 
-    const app = this.buildApp(pot);
-    const server = await new Promise<Server>((resolve, reject) => {
-      const s = app.listen(pot.port, () => resolve(s));
-      s.on('error', reject);
-    }).catch((err: NodeJS.ErrnoException) => {
-      this.logger.error(`Failed to bind DataPot ${pot.name} on :${pot.port}: ${err.message}`);
-      throw err;
-    });
-
-    this.servers.set(pot.id, server);
-    this.logger.log(`DataPot "${pot.name}" listening on :${pot.port}`);
+    try {
+      await this.records.syncIndexes(pot.key, pot.fields ?? []);
+      const app = this.buildApp(pot);
+      const server = await new Promise<Server>((resolve, reject) => {
+        const s = app.listen(pot.port, () => resolve(s));
+        s.on('error', reject);
+      });
+      this.servers.set(pot.id, server);
+      this.logger.log(`DataPot "${pot.name}" listening on :${pot.port}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.bindErrors.set(pot.id, message);
+      this.logger.error(`Failed to bind DataPot ${pot.name} on :${pot.port}: ${message}`);
+    }
   }
 
   async restartPot(pot: DataPotRecord): Promise<void> {
@@ -97,6 +117,7 @@ export class PotRuntimeService implements OnModuleDestroy {
       server.close(() => resolve());
     });
     this.servers.delete(id);
+    dropPotHandles(this.queryHandles, id);
   }
 
   async stopAll(): Promise<void> {
@@ -109,14 +130,27 @@ export class PotRuntimeService implements OnModuleDestroy {
   private buildApp(pot: DataPotRecord): Express {
     const app = express();
     app.use(express.json({ limit: '2mb' }));
-    app.use((_req, res, next) => {
+    app.use((req, res, next) => {
       res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      if (req.method === 'OPTIONS') {
+        res.sendStatus(204);
+        return;
+      }
       next();
     });
-    app.options('*', (_req, res) => {
-      res.sendStatus(204);
+    app.use(async (req, res, next) => {
+      if (req.method === 'OPTIONS' || isPublicPotPath(req.path)) {
+        next();
+        return;
+      }
+      const allowed = await this.allowBearer(pot.id, req.header('authorization'));
+      if (!allowed) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      next();
     });
 
     let validate: ValidateFunction | null = null;
@@ -171,10 +205,15 @@ export class PotRuntimeService implements OnModuleDestroy {
     });
 
     const apiPaths = buildPotApiPaths(pot.key);
+    mountPotMcp(app, pot, this.records, this.queryHandles);
 
     app.post(apiPaths.collection, async (req: Request, res: Response) => {
       try {
-        const body = req.body;
+        const raw =
+          req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+            ? (req.body as Record<string, unknown>)
+            : {};
+        const body = normalizeTypePayload(pot.fields ?? [], raw);
         if (validate && !validate(body)) {
           return res.status(400).json({
             error: 'Schema validation failed',
@@ -189,7 +228,7 @@ export class PotRuntimeService implements OnModuleDestroy {
           id: record.id,
           potId: record.potId,
           seq: record.seq,
-          payload: record.payload,
+          payload: normalizeTypePayload(pot.fields ?? [], record.payload),
           createdAt: record.createdAt.toISOString(),
         });
       } catch (e) {
@@ -198,9 +237,16 @@ export class PotRuntimeService implements OnModuleDestroy {
       }
     });
 
-    app.get(apiPaths.collection, async (_req: Request, res: Response) => {
+    app.get(apiPaths.collection, async (req: Request, res: Response) => {
       try {
-        const rows = await this.records.findByPot(pot.id);
+        const fromRaw = typeof req.query.from === 'string' ? req.query.from : undefined;
+        const toRaw = typeof req.query.to === 'string' ? req.query.to : undefined;
+        const from = fromRaw ? parseUtcInstant(fromRaw) : undefined;
+        const to = toRaw ? parseUtcInstant(toRaw) : undefined;
+        if ((fromRaw && !from) || (toRaw && !to)) {
+          return res.status(400).json({ error: 'from and to must be UTC date-time values' });
+        }
+        const rows = await this.records.findByPot(pot.id, 10_000, { from: from ?? undefined, to: to ?? undefined });
         return res.json(
           rows.map((r) => ({
             id: r.id,
@@ -235,4 +281,25 @@ export class PotRuntimeService implements OnModuleDestroy {
 
     return app;
   }
+
+  private async allowBearer(potId: string, header: string | undefined): Promise<boolean> {
+    const pot = await this.pots.findById(potId);
+    if (!pot?.apiTokenHash || !pot.apiTokenExpiresAt) return false;
+    if (new Date(pot.apiTokenExpiresAt).getTime() <= Date.now()) return false;
+    const match = /^Bearer\s+(\S+)$/i.exec(header ?? '');
+    if (!match) return false;
+    const digest = createHash('sha256').update(match[1]).digest();
+    let stored: Buffer;
+    try {
+      stored = Buffer.from(pot.apiTokenHash, 'hex');
+    } catch {
+      return false;
+    }
+    if (stored.length !== digest.length) return false;
+    return timingSafeEqual(stored, digest);
+  }
+}
+
+function isPublicPotPath(path: string): boolean {
+  return path === '/health' || path === POT_OAS_PATHS.openapi || path === POT_OAS_PATHS.docs;
 }

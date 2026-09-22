@@ -1,30 +1,16 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { DataSource, Repository } from 'typeorm';
 import { Collection, Db, Document, MongoClient } from 'mongodb';
-import { DbConfig } from '@datapot/shared';
+import { DbConfig, isValidPotKey, recordCollectionName } from '@datapot/shared';
 import { BootstrapService } from '../bootstrap/bootstrap.service';
-import { UserEntity } from './entities/user.entity';
-import { SystemConfigEntity } from './entities/system-config.entity';
-import { DataPotEntity } from './entities/datapot.entity';
-import { PotRecordEntity } from './entities/pot-record.entity';
 
-const SQL_ENTITIES = [
-  UserEntity,
-  SystemConfigEntity,
-  DataPotEntity,
-  PotRecordEntity,
-];
-
-export type StoreKind = 'sql' | 'mongo' | 'none';
+export type StoreKind = 'mongo' | 'none';
 
 @Injectable()
 export class DatabaseService implements OnModuleDestroy {
   private readonly logger = new Logger(DatabaseService.name);
-  private dataSource: DataSource | null = null;
   private mongo: MongoClient | null = null;
   private mongoDb: Db | null = null;
   private kind: StoreKind = 'none';
-  private connectedConfig: DbConfig | null = null;
 
   constructor(private readonly bootstrap: BootstrapService) {}
 
@@ -33,20 +19,7 @@ export class DatabaseService implements OnModuleDestroy {
   }
 
   get isConnected(): boolean {
-    return this.kind !== 'none';
-  }
-
-  /** Active SQL dialect when storeKind is sql */
-  get sqlDialect(): 'sqlite' | 'mariadb' | null {
-    if (this.kind !== 'sql' || !this.connectedConfig) return null;
-    return this.connectedConfig.type === 'sqlite' ? 'sqlite' : 'mariadb';
-  }
-
-  async query(sql: string, parameters?: unknown[]): Promise<unknown> {
-    if (!this.dataSource?.isInitialized) {
-      throw new Error('SQL database not connected');
-    }
-    return this.dataSource.query(sql, parameters);
+    return this.kind === 'mongo';
   }
 
   async connect(config?: DbConfig): Promise<void> {
@@ -55,20 +28,21 @@ export class DatabaseService implements OnModuleDestroy {
       this.kind = 'none';
       return;
     }
-
-    await this.disconnect();
-    this.connectedConfig = db;
-
-    if (db.type === 'mongodb') {
-      await this.connectMongo(db.url);
-      this.kind = 'mongo';
-      this.logger.log('Connected to MongoDB');
-      return;
+    if (db.type !== 'mongodb') {
+      throw new Error('Only MongoDB is supported');
+    }
+    if (!/^mongodb(\+srv)?:\/\//.test(db.url)) {
+      throw new Error('MongoDB URL must start with mongodb:// or mongodb+srv://');
     }
 
-    await this.connectSql(db);
-    this.kind = 'sql';
-    this.logger.log(`Connected to ${db.type}`);
+    await this.disconnect();
+    this.mongo = new MongoClient(db.url);
+    await this.mongo.connect();
+    const dbName = this.extractMongoDbName(db.url) || 'datapot';
+    this.mongoDb = this.mongo.db(dbName);
+    this.kind = 'mongo';
+    await this.ensureCoreIndexes();
+    this.logger.log('Connected to MongoDB');
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -76,10 +50,6 @@ export class DatabaseService implements OnModuleDestroy {
   }
 
   async disconnect(): Promise<void> {
-    if (this.dataSource?.isInitialized) {
-      await this.dataSource.destroy();
-    }
-    this.dataSource = null;
     if (this.mongo) {
       await this.mongo.close();
     }
@@ -88,96 +58,56 @@ export class DatabaseService implements OnModuleDestroy {
     this.kind = 'none';
   }
 
-  users(): Repository<UserEntity> {
-    return this.sqlRepo(UserEntity);
-  }
-
-  datapots(): Repository<DataPotEntity> {
-    return this.sqlRepo(DataPotEntity);
-  }
-
-  potRecords(): Repository<PotRecordEntity> {
-    return this.sqlRepo(PotRecordEntity);
-  }
-
-  systemConfig(): Repository<SystemConfigEntity> {
-    return this.sqlRepo(SystemConfigEntity);
-  }
-
   mongoCollection<T extends Document>(name: string): Collection<T> {
     if (!this.mongoDb) throw new Error('MongoDB not connected');
     return this.mongoDb.collection<T>(name);
   }
 
-  getMongoDb(): Db {
-    if (!this.mongoDb) throw new Error('MongoDB not connected');
-    return this.mongoDb;
+  records<T extends Document>(key: string): Collection<T> {
+    return this.mongoCollection<T>(recordCollectionName(key));
   }
 
-  private sqlRepo<T extends object>(entity: new () => T): Repository<T> {
-    if (!this.dataSource?.isInitialized) {
-      throw new Error('SQL database not connected');
+  async ensureRecordIndexes(
+    key: string,
+    fields: { slug?: string; type?: string }[],
+  ): Promise<void> {
+    if (!isValidPotKey(key)) return;
+    const col = this.records(key);
+    await col.createIndex({ id: 1 }, { unique: true, name: 'id_unique' });
+    await col.createIndex({ seq: 1 }, { unique: true, name: 'seq_unique' });
+    await col.createIndex({ createdAt: 1, seq: 1 }, { name: 'createdAt_seq' });
+    await col.createIndex({ priority: 1 }, { name: 'priority' });
+    await col.createIndex({ confirmed: 1 }, { name: 'confirmed' });
+    const wanted = new Set(
+      fields
+        .filter((field) => field.type === 'type' && field.slug && /^[a-z0-9_]+$/.test(field.slug))
+        .map((field) => field.slug as string),
+    );
+    const indexes = await col.indexes();
+    for (const idx of indexes) {
+      if (!idx.name?.startsWith('type_')) continue;
+      const slug = idx.name.slice('type_'.length);
+      if (!wanted.has(slug)) await col.dropIndex(idx.name);
     }
-    return this.dataSource.getRepository(entity);
-  }
-
-  private async connectSql(db: DbConfig): Promise<void> {
-    if (db.type === 'sqlite') {
-      this.dataSource = new DataSource({
-        type: 'better-sqlite3',
-        database: db.url,
-        entities: SQL_ENTITIES,
-        synchronize: true,
-      });
-    } else {
-      const parsed = this.parseMysqlUrl(db.url);
-      this.dataSource = new DataSource({
-        type: 'mariadb',
-        host: parsed.host,
-        port: parsed.port,
-        username: parsed.username,
-        password: parsed.password,
-        database: parsed.database,
-        entities: SQL_ENTITIES,
-        synchronize: true,
-      });
+    for (const slug of wanted) {
+      await col.createIndex({ [`payload.${slug}`]: 1 }, { name: `type_${slug}` });
     }
-    await this.dataSource.initialize();
   }
 
-  private async connectMongo(url: string): Promise<void> {
-    this.mongo = new MongoClient(url);
-    await this.mongo.connect();
-    const dbName = this.extractMongoDbName(url) || 'datapot';
-    this.mongoDb = this.mongo.db(dbName);
+  async dropRecordCollection(key: string): Promise<void> {
+    if (!this.mongoDb || !isValidPotKey(key)) return;
+    const name = recordCollectionName(key);
+    const exists = await this.mongoDb.listCollections({ name }).hasNext();
+    if (exists) await this.mongoDb.collection(name).drop();
+  }
+
+  private async ensureCoreIndexes(): Promise<void> {
+    if (!this.mongoDb) return;
     await this.mongoDb.collection('users').createIndex({ username: 1 }, { unique: true });
     await this.mongoDb.collection('datapots').createIndex({ port: 1 }, { unique: true });
     await this.mongoDb.collection('datapots').createIndex({ name: 1 }, { unique: true });
-    const records = this.mongoDb.collection('pot_records');
-    await records.createIndex({ potId: 1 });
-    await records.createIndex({ potId: 1, seq: 1 }, { unique: true });
-    await records.createIndex({ potId: 1, priority: 1 });
-    await records.createIndex({ potId: 1, confirmed: 1 });
-    await records.updateMany({ priority: { $exists: false } }, { $set: { priority: 'none' } });
-    await records.updateMany({ confirmed: { $exists: false } }, { $set: { confirmed: false } });
+    await this.mongoDb.collection('datapots').createIndex({ key: 1 }, { unique: true });
     await this.mongoDb.collection('pot_sequences').createIndex({ potId: 1 }, { unique: true });
-  }
-
-  private parseMysqlUrl(url: string): {
-    host: string;
-    port: number;
-    username: string;
-    password: string;
-    database: string;
-  } {
-    const u = new URL(url);
-    return {
-      host: u.hostname || 'localhost',
-      port: Number(u.port || 3306),
-      username: decodeURIComponent(u.username || 'root'),
-      password: decodeURIComponent(u.password || ''),
-      database: (u.pathname || '/datapot').replace(/^\//, '') || 'datapot',
-    };
   }
 
   private extractMongoDbName(url: string): string | null {

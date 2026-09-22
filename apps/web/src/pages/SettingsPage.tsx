@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   DB_CONNECTION_EXAMPLES,
@@ -49,10 +49,8 @@ export function SettingsPage() {
   const navigate = useNavigate();
   const { refreshStatus, logout } = useAuth();
   const [info, setInfo] = useState<DbInfo | null>(null);
-  const [dbType, setDbType] = useState<DbType>('mariadb');
-  const [url, setUrl] = useState(DB_CONNECTION_EXAMPLES.mariadb);
-  const [savedDbType, setSavedDbType] = useState<DbType>('mariadb');
-  const [savedUrl, setSavedUrl] = useState(DB_CONNECTION_EXAMPLES.mariadb);
+  const [url, setUrl] = useState(DB_CONNECTION_EXAMPLES.mongodb);
+  const [savedUrl, setSavedUrl] = useState(DB_CONNECTION_EXAMPLES.mongodb);
   const [busy, setBusy] = useState(false);
   const [connState, setConnState] = useState<ConnState>('idle');
   const [connMessage, setConnMessage] = useState('');
@@ -75,11 +73,10 @@ export function SettingsPage() {
   const [extHostError, setExtHostError] = useState<string | null>(null);
   const [extPortError, setExtPortError] = useState<string | null>(null);
 
-  const example = useMemo(() => DB_CONNECTION_EXAMPLES[dbType], [dbType]);
-  const urlLabel = dbType === 'sqlite' ? t('settings.dbms.filePath') : t('settings.dbms.url');
+  const example = DB_CONNECTION_EXAMPLES.mongodb;
   const finishReloginRef = useRef<() => void>(() => {});
 
-  const dbDirty = dbType !== savedDbType || url.trim() !== savedUrl.trim();
+  const dbDirty = url.trim() !== savedUrl.trim();
   const extDirty =
     extHost.trim() !== savedExtHost.trim() || extPort.trim() !== savedExtPort.trim();
   const pwDirty = adminPassword.length > 0 || adminPassword2.length > 0;
@@ -87,19 +84,9 @@ export function SettingsPage() {
   async function load() {
     const d = await api<DbInfo>('/system/db');
     setInfo(d);
-    let nextType: DbType = d.type ?? 'mariadb';
-    let nextUrl = DB_CONNECTION_EXAMPLES[nextType];
-    if (d.type) {
-      nextType = d.type;
-      if (d.url && (d.type === 'sqlite' || !d.url.includes('****'))) {
-        nextUrl = d.url;
-      } else {
-        nextUrl = DB_CONNECTION_EXAMPLES[d.type];
-      }
-    }
-    setDbType(nextType);
+    const nextUrl =
+      d.url && !d.url.includes('****') ? d.url : DB_CONNECTION_EXAMPLES.mongodb;
     setUrl(nextUrl);
-    setSavedDbType(nextType);
     setSavedUrl(nextUrl);
     if (d.connected) setConnState('ok');
   }
@@ -156,15 +143,6 @@ export function SettingsPage() {
     }, 1000);
   }
 
-  function onDbTypeChange(next: DbType) {
-    setDbType(next);
-    setUrl(DB_CONNECTION_EXAMPLES[next]);
-    setConnState('idle');
-    setConnMessage('');
-    setFeedback(null);
-    setEmptyDb(false);
-  }
-
   function onLanguageChange(next: Locale) {
     if (next === locale) return;
     setLocale(next);
@@ -188,12 +166,11 @@ export function SettingsPage() {
     try {
       const next = await api<DbInfo>('/system/db', {
         method: 'POST',
-        body: JSON.stringify({ dbType, url }),
+        body: JSON.stringify({ dbType: 'mongodb', url }),
       });
       setInfo(next);
       setConnState('ok');
       setConnMessage('');
-      setSavedDbType(dbType);
       setSavedUrl(url);
       setEmptyDb(Boolean(next.emptyDatabase));
       setFeedback(next.message || null);
@@ -367,19 +344,7 @@ export function SettingsPage() {
 
           <form className="dpot-form-grid" onSubmit={(e) => void onSubmit(e)}>
             <label>
-              {t('settings.dbms.type')}
-              <select
-                value={dbType}
-                onChange={(e) => onDbTypeChange(e.target.value as DbType)}
-                disabled={Boolean(relogin)}
-              >
-                <option value="mariadb">MariaDB</option>
-                <option value="mongodb">MongoDB</option>
-                <option value="sqlite">SQLite</option>
-              </select>
-            </label>
-            <label>
-              {urlLabel}
+              {t('settings.dbms.url')}
               <input
                 value={url}
                 onChange={(e) => {

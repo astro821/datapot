@@ -53,7 +53,7 @@ async function bootstrap() {
   if (webRoot) {
     app.useStaticAssets(webRoot);
     const expressApp = app.getHttpAdapter().getInstance();
-    expressApp.get('*', (req: { path: string; method: string }, res: { sendFile: (p: string) => void }, next: () => void) => {
+    expressApp.use((req: { path: string; method: string }, res: { sendFile: (p: string) => void }, next: () => void) => {
       if (req.method === 'GET' && !req.path.startsWith('/api')) {
         const index = join(webRoot, 'index.html');
         if (existsSync(index)) {

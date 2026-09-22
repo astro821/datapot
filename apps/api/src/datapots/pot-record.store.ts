@@ -1,10 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { In, MoreThanOrEqual } from 'typeorm';
 import { v4 as uuid } from 'uuid';
-import { isPotPriority, type PotPriority } from '@datapot/shared';
+import { isPotPriority, normalizeTypePayload, normalizeTypeValue, zonedDayKey, zonedDayRange, type PotField, type PotPriority } from '@datapot/shared';
 import { DatabaseService } from '../database/database.service';
-import { PotRecordEntity } from '../database/entities/pot-record.entity';
 import { PotSequenceService } from './pot-sequence.service';
+import type { Collection } from 'mongodb';
 
 export interface PotRecord {
   id: string;
@@ -31,145 +30,85 @@ export interface PotRecordPage {
 
 @Injectable()
 export class PotRecordStore {
+  private readonly keys = new Map<string, string>();
+  private readonly fieldCache = new Map<string, PotField[]>();
+
   constructor(
     private readonly db: DatabaseService,
     private readonly sequences: PotSequenceService,
   ) {}
 
-  async findByPot(potId: string, limit = 10_000): Promise<PotRecord[]> {
-    if (this.db.storeKind === 'sql') {
-      const rows = await this.db.potRecords().find({
-        where: { potId },
-        order: { seq: 'ASC' },
-        take: limit,
-      });
-      return rows.map((r) => this.fromEntity(r));
+  async findByPot(
+    potId: string,
+    limit = 10_000,
+    range?: { from?: Date; to?: Date },
+  ): Promise<PotRecord[]> {
+    const col = await this.collection(potId);
+    const filter: Record<string, unknown> = { potId };
+    if (range?.from || range?.to) {
+      const createdAt: Record<string, Date> = {};
+      if (range.from) createdAt.$gte = range.from;
+      if (range.to) createdAt.$lte = range.to;
+      filter.createdAt = createdAt;
     }
-    if (this.db.storeKind === 'mongo') {
-      const rows = await this.db
-        .mongoCollection('pot_records')
-        .find({ potId })
-        .sort({ seq: 1 })
-        .limit(limit)
-        .toArray();
-      return rows.map((r) => this.normalize(r as unknown as PotRecord));
-    }
-    return [];
+    const rows = await col.find(filter).sort({ seq: 1 }).limit(limit).toArray();
+    return rows.map((row) => this.present(row as unknown as PotRecord, potId));
   }
 
-  /** One page of records. Search and sort run in the database, not on a preloaded slice. */
   async findPage(potId: string, query: PotRecordPageQuery): Promise<PotRecordPage> {
     const offset = Math.max(0, Math.floor(query.offset) || 0);
     const limit = Math.min(100, Math.max(1, Math.floor(query.limit) || 20));
     const q = query.q?.trim() ?? '';
     const sort = resolveRecordSort(query.sortField, query.sortDir);
-
-    if (this.db.storeKind === 'sql') {
-      const qb = this.db.potRecords().createQueryBuilder('r').where('r.potId = :potId', { potId });
-      if (q) {
-        const like = `%${escapeLike(q.toLowerCase())}%`;
-        const seqCast = this.db.sqlDialect === 'sqlite' ? 'CAST(r.seq AS TEXT)' : 'CAST(r.seq AS CHAR)';
-        const createdCast =
-          this.db.sqlDialect === 'sqlite' ? 'CAST(r.createdAt AS TEXT)' : 'CAST(r.createdAt AS CHAR)';
-        const confirmedCast =
-          this.db.sqlDialect === 'sqlite' ? 'CAST(r.confirmed AS TEXT)' : 'CAST(r.confirmed AS CHAR)';
-        qb.andWhere(
-          `(LOWER(r.id) LIKE :like ESCAPE '\\' OR LOWER(${seqCast}) LIKE :like ESCAPE '\\' OR LOWER(r.payload) LIKE :like ESCAPE '\\' OR LOWER(${createdCast}) LIKE :like ESCAPE '\\' OR LOWER(r.priority) LIKE :like ESCAPE '\\' OR LOWER(${confirmedCast}) LIKE :like ESCAPE '\\')`,
-          { like },
-        );
-      }
-      const total = await qb.clone().getCount();
-      if (sort.kind === 'seq') {
-        qb.orderBy('r.seq', sort.dir);
-      } else if (sort.kind === 'createdAt') {
-        qb.orderBy('r.createdAt', sort.dir).addOrderBy('r.seq', 'ASC');
-      } else if (sort.kind === 'priority') {
-        qb.orderBy('r.priority', sort.dir).addOrderBy('r.seq', 'ASC');
-      } else if (sort.kind === 'confirmed') {
-        qb.orderBy('r.confirmed', sort.dir).addOrderBy('r.seq', 'ASC');
-      } else if (sort.kind === 'payload') {
-        const expr =
-          this.db.sqlDialect === 'sqlite'
-            ? `json_extract(r.payload, '$.${sort.field}')`
-            : `JSON_UNQUOTE(JSON_EXTRACT(r.payload, '$.${sort.field}'))`;
-        qb.addSelect(expr, 'dpot_sort').orderBy('dpot_sort', sort.dir).addOrderBy('r.seq', 'ASC');
-      }
-      const rows = await qb.skip(offset).take(limit).getMany();
-      return { items: rows.map((row) => this.fromEntity(row)), total };
+    const col = await this.collection(potId);
+    const sortDoc = mongoSort(sort);
+    if (!q) {
+      const total = await col.countDocuments({ potId });
+      const rows = await col.find({ potId }).sort(sortDoc).skip(offset).limit(limit).toArray();
+      return {
+        items: rows.map((row) => this.present(row as unknown as PotRecord, potId)),
+        total,
+      };
     }
+    const [result] = await col
+      .aggregate<{ items: PotRecord[]; total: { count: number }[] }>([
+        { $match: { potId } },
+        { $addFields: { _search: searchText() } },
+        { $match: { _search: { $regex: escapeRegex(q), $options: 'i' } } },
+        {
+          $facet: {
+            items: [
+              { $sort: sortDoc },
+              { $skip: offset },
+              { $limit: limit },
+              { $project: { _search: 0 } },
+            ],
+            total: [{ $count: 'count' }],
+          },
+        },
+      ])
+      .toArray();
+    const items = (result?.items ?? []).map((row) => this.present(row, potId));
+    return { items, total: result?.total?.[0]?.count ?? 0 };
+  }
 
-    if (this.db.storeKind === 'mongo') {
-      const col = this.db.mongoCollection('pot_records');
-      const sortDoc = mongoSort(sort);
-      if (!q) {
-        const total = await col.countDocuments({ potId });
-        const rows = await col.find({ potId }).sort(sortDoc).skip(offset).limit(limit).toArray();
-        return {
-          items: rows.map((row) => this.normalize(row as unknown as PotRecord)),
-          total,
-        };
-      }
-      const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const [result] = await col
-        .aggregate<{ items: PotRecord[]; total: { count: number }[] }>([
-          { $match: { potId } },
-          {
-            $addFields: {
-              _search: {
-                $concat: [
-                  { $ifNull: ['$id', ''] },
-                  ' ',
-                  { $toString: { $ifNull: ['$seq', ''] } },
-                  ' ',
-                  { $toString: { $ifNull: ['$createdAt', ''] } },
-                  ' ',
-                  { $ifNull: ['$priority', ''] },
-                  ' ',
-                  { $toString: { $ifNull: ['$confirmed', false] } },
-                  ' ',
-                  {
-                    $reduce: {
-                      input: { $objectToArray: { $ifNull: ['$payload', {}] } },
-                      initialValue: '',
-                      in: {
-                        $concat: [
-                          '$$value',
-                          ' ',
-                          {
-                            $convert: {
-                              input: '$$this.v',
-                              to: 'string',
-                              onError: '',
-                              onNull: '',
-                            },
-                          },
-                        ],
-                      },
-                    },
-                  },
-                ],
-              },
-            },
-          },
-          { $match: { _search: { $regex: escaped, $options: 'i' } } },
-          {
-            $facet: {
-              items: [
-                { $sort: sortDoc },
-                { $skip: offset },
-                { $limit: limit },
-                { $project: { _search: 0 } },
-              ],
-              total: [{ $count: 'count' }],
-            },
-          },
-        ])
-        .toArray();
-      const items = (result?.items ?? []).map((row) => this.normalize(row));
-      return { items, total: result?.total?.[0]?.count ?? 0 };
+  async findIds(potId: string, q?: string): Promise<string[]> {
+    const query = q?.trim() ?? '';
+    const col = await this.collection(potId);
+    if (!query) {
+      const rows = await col.find({ potId }).project({ id: 1 }).sort({ seq: 1 }).toArray();
+      return rows.map((row) => String((row as { id?: string }).id ?? ''));
     }
-
-    return { items: [], total: 0 };
+    const rows = await col
+      .aggregate<{ id: string }>([
+        { $match: { potId } },
+        { $addFields: { _search: searchText() } },
+        { $match: { _search: { $regex: escapeRegex(query), $options: 'i' } } },
+        { $sort: { seq: 1 } },
+        { $project: { _id: 0, id: 1 } },
+      ])
+      .toArray();
+    return rows.map((row) => row.id);
   }
 
   async insert(
@@ -184,24 +123,20 @@ export class PotRecordStore {
     },
   ): Promise<PotRecord> {
     const seq = opts?.seq ?? (await this.sequences.nextVal(potId));
+    await this.collection(potId);
+    const fields = this.fieldCache.get(potId) ?? [];
     const record: PotRecord = {
       id: opts?.id ?? uuid(),
       potId,
       seq,
-      payload,
+      payload: normalizeTypePayload(fields, payload),
       priority: opts?.priority && isPotPriority(opts.priority) ? opts.priority : 'none',
       confirmed: opts?.confirmed === true,
       createdAt: opts?.createdAt ?? new Date(),
     };
-    if (this.db.storeKind === 'sql') {
-      await this.db.potRecords().save(record as PotRecordEntity);
-      return record;
-    }
-    if (this.db.storeKind === 'mongo') {
-      await this.db.mongoCollection('pot_records').insertOne({ ...record });
-      return record;
-    }
-    throw new Error('Database not connected');
+    const col = await this.collection(potId);
+    await col.insertOne({ ...record });
+    return record;
   }
 
   async create(potId: string, payload: Record<string, unknown>): Promise<PotRecord> {
@@ -209,15 +144,9 @@ export class PotRecordStore {
   }
 
   async findById(potId: string, id: string): Promise<PotRecord | null> {
-    if (this.db.storeKind === 'sql') {
-      const row = await this.db.potRecords().findOne({ where: { id, potId } });
-      return row ? this.fromEntity(row) : null;
-    }
-    if (this.db.storeKind === 'mongo') {
-      const row = await this.db.mongoCollection('pot_records').findOne({ id, potId });
-      return row ? this.normalize(row as unknown as PotRecord) : null;
-    }
-    return null;
+    const col = await this.collection(potId);
+    const row = await col.findOne({ id, potId });
+    return row ? this.present(row as unknown as PotRecord, potId) : null;
   }
 
   async updateFlags(
@@ -232,110 +161,56 @@ export class PotRecordStore {
       priority: patch.priority ?? current.priority,
       confirmed: patch.confirmed ?? current.confirmed,
     };
-    if (this.db.storeKind === 'sql') {
-      await this.db.potRecords().update(
-        { id, potId },
-        { priority: next.priority, confirmed: next.confirmed },
-      );
-      return next;
-    }
-    if (this.db.storeKind === 'mongo') {
-      await this.db.mongoCollection('pot_records').updateOne(
-        { id, potId },
-        { $set: { priority: next.priority, confirmed: next.confirmed } },
-      );
-      return next;
-    }
-    return null;
+    const col = await this.collection(potId);
+    await col.updateOne(
+      { id, potId },
+      { $set: { priority: next.priority, confirmed: next.confirmed } },
+    );
+    return next;
   }
 
   async deleteByPot(potId: string): Promise<void> {
-    if (this.db.storeKind === 'sql') {
-      await this.db.potRecords().delete({ potId });
-      return;
-    }
-    if (this.db.storeKind === 'mongo') {
-      await this.db.mongoCollection('pot_records').deleteMany({ potId });
-    }
+    const key = await this.keyFor(potId);
+    this.keys.delete(potId);
+    this.fieldCache.delete(potId);
+    await this.db.dropRecordCollection(key);
   }
 
   async deleteByIds(potId: string, ids: string[]): Promise<number> {
     const unique = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
     if (unique.length === 0) return 0;
-    if (this.db.storeKind === 'sql') {
-      const r = await this.db.potRecords().delete({ potId, id: In(unique) });
-      return r.affected ?? 0;
-    }
-    if (this.db.storeKind === 'mongo') {
-      const r = await this.db
-        .mongoCollection('pot_records')
-        .deleteMany({ potId, id: { $in: unique } });
-      return r.deletedCount ?? 0;
-    }
-    return 0;
+    const col = await this.collection(potId);
+    const result = await col.deleteMany({ potId, id: { $in: unique } });
+    return result.deletedCount ?? 0;
   }
 
   async countByPot(potId: string): Promise<number> {
-    if (this.db.storeKind === 'sql') {
-      return this.db.potRecords().count({ where: { potId } });
-    }
-    if (this.db.storeKind === 'mongo') {
-      return this.db.mongoCollection('pot_records').countDocuments({ potId });
-    }
-    return 0;
+    const col = await this.collection(potId);
+    return col.countDocuments({ potId });
   }
 
   async countUnverifiedByPot(potId: string): Promise<number> {
-    if (this.db.storeKind === 'sql') {
-      return this.db.potRecords().count({ where: { potId, confirmed: false } });
-    }
-    if (this.db.storeKind === 'mongo') {
-      return this.db.mongoCollection('pot_records').countDocuments({
-        potId,
-        confirmed: { $ne: true },
-      });
-    }
-    return 0;
+    const col = await this.collection(potId);
+    return col.countDocuments({ potId, confirmed: { $ne: true } });
   }
 
   async findEarliestByPot(potId: string): Promise<PotRecord | null> {
-    if (this.db.storeKind === 'sql') {
-      const row = await this.db.potRecords().findOne({
-        where: { potId },
-        order: { createdAt: 'ASC' },
-      });
-      return row ? this.fromEntity(row) : null;
-    }
-    if (this.db.storeKind === 'mongo') {
-      const row = await this.db
-        .mongoCollection('pot_records')
-        .find({ potId })
-        .sort({ createdAt: 1 })
-        .limit(1)
-        .next();
-      return row ? this.normalize(row as unknown as PotRecord) : null;
-    }
-    return null;
+    const col = await this.collection(potId);
+    const row = await col.find({ potId }).sort({ createdAt: 1 }).limit(1).next();
+    return row ? this.present(row as unknown as PotRecord, potId) : null;
   }
 
   async findLatestByPot(potId: string): Promise<PotRecord | null> {
-    if (this.db.storeKind === 'sql') {
-      const row = await this.db.potRecords().findOne({
-        where: { potId },
-        order: { createdAt: 'DESC' },
-      });
-      return row ? this.fromEntity(row) : null;
+    const col = await this.collection(potId);
+    const row = await col.find({ potId }).sort({ createdAt: -1 }).limit(1).next();
+    return row ? this.present(row as unknown as PotRecord, potId) : null;
+  }
+
+  async syncIndexes(key: string, fields: PotField[]): Promise<void> {
+    for (const [id, cached] of this.keys) {
+      if (cached === key) this.fieldCache.set(id, fields);
     }
-    if (this.db.storeKind === 'mongo') {
-      const row = await this.db
-        .mongoCollection('pot_records')
-        .find({ potId })
-        .sort({ createdAt: -1 })
-        .limit(1)
-        .next();
-      return row ? this.normalize(row as unknown as PotRecord) : null;
-    }
-    return null;
+    await this.db.ensureRecordIndexes(key, fields);
   }
 
   /**
@@ -346,22 +221,20 @@ export class PotRecordStore {
     potId: string,
     field: string,
     daySpan = 183,
+    offsetMinutes = 0,
   ): Promise<{ dates: string[]; series: { label: string; counts: number[] }[] }> {
     if (!/^[a-z0-9_]+$/.test(field)) return { dates: [], series: [] };
-    const { start, end, dates } = this.rangeDays(daySpan);
+    const { start, end, dates } = zonedDayRange(daySpan, offsetMinutes);
     const index = new Map(dates.map((date, i) => [date, i]));
     const buckets = new Map<string, number[]>();
 
     const add = (at: Date, payload: Record<string, unknown> | null | undefined) => {
       if (at > end) return;
-      const slot = index.get(this.dayKey(at));
+      const slot = index.get(zonedDayKey(at, offsetMinutes));
       if (slot == null) return;
       const raw = payload?.[field];
       if (raw == null || raw === '') return;
-      const parts = (Array.isArray(raw) ? raw.map((item) => String(item)) : String(raw).split(','))
-        .map((part) => part.trim())
-        .filter(Boolean);
-      for (const label of parts) {
+      for (const label of normalizeTypeValue(raw)) {
         let counts = buckets.get(label);
         if (!counts) {
           counts = Array(dates.length).fill(0);
@@ -371,25 +244,14 @@ export class PotRecordStore {
       }
     };
 
-    if (this.db.storeKind === 'sql') {
-      const rows = await this.db.potRecords().find({
-        where: { potId, createdAt: MoreThanOrEqual(start) },
-        select: ['createdAt', 'payload'],
-      });
-      for (const row of rows) {
-        const at = row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt);
-        add(at, row.payload);
-      }
-    } else if (this.db.storeKind === 'mongo') {
-      const rows = await this.db
-        .mongoCollection('pot_records')
-        .find({ potId, createdAt: { $gte: start, $lte: end } })
-        .project({ createdAt: 1, payload: 1 })
-        .toArray();
-      for (const row of rows) {
-        const doc = row as { createdAt: Date; payload?: Record<string, unknown> };
-        add(new Date(doc.createdAt), doc.payload);
-      }
+    const col = await this.collection(potId);
+    const rows = await col
+      .find({ potId, createdAt: { $gte: start, $lte: end } })
+      .project({ createdAt: 1, payload: 1 })
+      .toArray();
+    for (const row of rows) {
+      const doc = row as { createdAt: Date; payload?: Record<string, unknown> };
+      add(new Date(doc.createdAt), doc.payload);
     }
 
     const series = [...buckets.entries()]
@@ -401,76 +263,137 @@ export class PotRecordStore {
     return { dates, series };
   }
 
-  /**
-   * Daily create counts for [since, now], filled with zeros for missing days.
-   * Returns oldest → newest, length = daySpan.
-   */
   async dailyCountsByPot(
     potId: string,
     daySpan = 30,
+    offsetMinutes = 0,
   ): Promise<{ date: string; count: number }[]> {
-    const { start, end, dates } = this.rangeDays(daySpan);
+    const { start, end, dates } = zonedDayRange(daySpan, offsetMinutes);
     const buckets = new Map(dates.map((date) => [date, 0]));
-
-    if (this.db.storeKind === 'sql') {
-      const rows = await this.db.potRecords().find({
-        where: { potId, createdAt: MoreThanOrEqual(start) },
-        select: ['createdAt'],
-      });
-      for (const row of rows) {
-        const at = row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt);
-        if (at > end) continue;
-        const key = this.dayKey(at);
-        if (buckets.has(key)) buckets.set(key, (buckets.get(key) || 0) + 1);
-      }
-    } else if (this.db.storeKind === 'mongo') {
-      const rows = await this.db
-        .mongoCollection('pot_records')
-        .find({ potId, createdAt: { $gte: start, $lte: end } })
-        .project({ createdAt: 1 })
-        .toArray();
-      for (const row of rows) {
-        const at = new Date((row as { createdAt: Date }).createdAt);
-        const key = this.dayKey(at);
-        if (buckets.has(key)) buckets.set(key, (buckets.get(key) || 0) + 1);
-      }
+    const col = await this.collection(potId);
+    const rows = await col
+      .find({ potId, createdAt: { $gte: start, $lte: end } })
+      .project({ createdAt: 1 })
+      .toArray();
+    for (const row of rows) {
+      const at = new Date((row as { createdAt: Date }).createdAt);
+      const key = zonedDayKey(at, offsetMinutes);
+      if (buckets.has(key)) buckets.set(key, (buckets.get(key) || 0) + 1);
     }
-
     return [...buckets.entries()].map(([date, count]) => ({ date, count }));
   }
 
-  private rangeDays(daySpan: number): { start: Date; end: Date; dates: string[] } {
-    const end = new Date();
-    end.setHours(23, 59, 59, 999);
-    const start = new Date(end);
-    start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() - (daySpan - 1));
-    const dates: string[] = [];
-    for (let i = 0; i < daySpan; i++) {
-      const d = new Date(start);
-      d.setDate(start.getDate() + i);
-      dates.push(this.dayKey(d));
+  async queryRecords(
+    potId: string,
+    opts: {
+      from: Date;
+      to: Date;
+      filters: Record<string, string>;
+      afterSeq: number;
+      limit: number;
+    },
+  ): Promise<PotRecord[]> {
+    const col = await this.collection(potId);
+    const filter: Record<string, unknown> = {
+      potId,
+      seq: { $gt: opts.afterSeq },
+      createdAt: { $gte: opts.from, $lte: opts.to },
+    };
+    for (const [slug, value] of Object.entries(opts.filters)) {
+      if (!/^[a-z0-9_]+$/.test(slug) || !value) continue;
+      filter[`payload.${slug}`] = value;
     }
-    return { start, end, dates };
+    const rows = await col.find(filter).sort({ seq: 1 }).limit(opts.limit).toArray();
+    return rows.map((row) => this.present(row as unknown as PotRecord, potId));
   }
 
-  private dayKey(d: Date): string {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
+  async topTypeValues(
+    potId: string,
+    fields: PotField[],
+    range?: { from?: Date; to?: Date },
+  ): Promise<Record<string, { value: string; count: number }[]>> {
+    const typeFields = fields.filter(
+      (field) => field.type === 'type' && /^[a-z0-9_]+$/.test(field.slug),
+    );
+    const col = await this.collection(potId);
+    const filter: Record<string, unknown> = { potId };
+    if (range?.from || range?.to) {
+      const createdAt: Record<string, Date> = {};
+      if (range.from) createdAt.$gte = range.from;
+      if (range.to) createdAt.$lte = range.to;
+      filter.createdAt = createdAt;
+    }
+    const out: Record<string, { value: string; count: number }[]> = {};
+    await Promise.all(
+      typeFields.map(async (field) => {
+        const path = `$payload.${field.slug}`;
+        const rows = await col
+          .aggregate<{ _id: string; count: number }>([
+            { $match: filter },
+            {
+              $project: {
+                raw: {
+                  $switch: {
+                    branches: [
+                      { case: { $isArray: path }, then: path },
+                      { case: { $eq: [{ $type: path }, 'string'] }, then: [path] },
+                    ],
+                    default: [],
+                  },
+                },
+              },
+            },
+            { $unwind: '$raw' },
+            {
+              $project: {
+                tokens: {
+                  $split: [
+                    { $convert: { input: '$raw', to: 'string', onError: '', onNull: '' } },
+                    ',',
+                  ],
+                },
+              },
+            },
+            { $unwind: '$tokens' },
+            { $project: { token: { $trim: { input: '$tokens' } } } },
+            { $match: { token: { $ne: '' } } },
+            { $group: { _id: '$token', count: { $sum: 1 } } },
+            { $sort: { count: -1, _id: 1 } },
+            { $limit: 10 },
+          ])
+          .toArray();
+        out[field.slug] = rows
+          .map((row) => ({ value: String(row._id), count: row.count }))
+          .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value, 'ko'));
+      }),
+    );
+    return out;
   }
 
-  private fromEntity(row: PotRecordEntity): PotRecord {
-    return this.normalize({
-      id: row.id,
-      potId: row.potId,
-      seq: row.seq,
-      payload: row.payload,
-      priority: row.priority,
-      confirmed: row.confirmed,
-      createdAt: row.createdAt,
+  private async collection(potId: string): Promise<Collection> {
+    const key = await this.keyFor(potId);
+    return this.db.records(key);
+  }
+
+  private async keyFor(potId: string): Promise<string> {
+    const cached = this.keys.get(potId);
+    if (cached && this.fieldCache.has(potId)) return cached;
+    const pot = await this.db.mongoCollection<{ id: string; key?: string; fields?: PotField[] }>('datapots').findOne({
+      id: potId,
     });
+    const key = pot?.key?.trim() ?? '';
+    if (!pot || !key) throw new Error(`Pot not found: ${potId}`);
+    this.keys.set(potId, key);
+    this.fieldCache.set(potId, Array.isArray(pot.fields) ? pot.fields : []);
+    return key;
+  }
+
+  private present(row: PotRecord, potId: string): PotRecord {
+    const base = this.normalize(row);
+    return {
+      ...base,
+      payload: normalizeTypePayload(this.fieldCache.get(potId) ?? [], base.payload ?? {}),
+    };
   }
 
   private normalize(row: PotRecord): PotRecord {
@@ -478,7 +401,7 @@ export class PotRecordStore {
       ...row,
       seq: Number(row.seq ?? 0),
       priority: isPotPriority(row.priority) ? row.priority : 'none',
-      confirmed: isConfirmedFlag(row.confirmed),
+      confirmed: row.confirmed === true,
     };
   }
 }
@@ -500,17 +423,47 @@ function resolveRecordSort(field: string | undefined, dir: 'asc' | 'desc' | unde
 
 function mongoSort(sort: RecordSort): Record<string, 1 | -1> {
   const dir = sort.dir === 'DESC' ? -1 : 1;
-  if (sort.kind === 'createdAt') return { createdAt: dir, seq: 1 };
-  if (sort.kind === 'priority') return { priority: dir, seq: 1 };
-  if (sort.kind === 'confirmed') return { confirmed: dir, seq: 1 };
   if (sort.kind === 'payload') return { [`payload.${sort.field}`]: dir, seq: 1 };
-  return { seq: dir };
+  return { [sort.kind]: dir, ...(sort.kind === 'seq' ? {} : { seq: 1 }) };
 }
 
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function isConfirmedFlag(value: unknown): boolean {
-  return value === true || value === 1 || value === '1' || value === 'true';
+function searchText() {
+  return {
+    $concat: [
+      { $ifNull: ['$id', ''] },
+      ' ',
+      { $toString: { $ifNull: ['$seq', ''] } },
+      ' ',
+      { $toString: { $ifNull: ['$createdAt', ''] } },
+      ' ',
+      { $ifNull: ['$priority', ''] },
+      ' ',
+      { $toString: { $ifNull: ['$confirmed', false] } },
+      ' ',
+      {
+        $reduce: {
+          input: { $objectToArray: { $ifNull: ['$payload', {}] } },
+          initialValue: '',
+          in: {
+            $concat: [
+              '$$value',
+              ' ',
+              {
+                $convert: {
+                  input: '$$this.v',
+                  to: 'string',
+                  onError: '',
+                  onNull: '',
+                },
+              },
+            ],
+          },
+        },
+      },
+    ],
+  };
 }

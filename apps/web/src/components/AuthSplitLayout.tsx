@@ -1,56 +1,29 @@
 import { FormEvent, ReactNode, useState } from 'react';
-import brandSvg from '../assets/images/brand.svg';
+import brandSvg from '../assets/images/brand-light.svg';
 import { useT } from '../i18n';
 
 type AuthSplitLayoutProps = {
   children: ReactNode;
-  eyebrow?: string;
-  headline?: ReactNode;
-  tagline?: string;
 };
 
-export function AuthSplitLayout({ children, eyebrow, headline, tagline }: AuthSplitLayoutProps) {
-  const t = useT();
-  const resolvedEyebrow = eyebrow ?? t('brand.eyebrow');
-  const resolvedHeadline = headline ?? (
-    <>
-      {t('brand.headlineLead')}
-      <br />
-      <em>{t('brand.headlineEm')}</em>
-    </>
-  );
-  const resolvedTagline = tagline ?? t('brand.tagline');
-
+export function AuthSplitLayout({ children }: AuthSplitLayoutProps) {
   return (
     <div className="login-start-page fops-auth-page">
       <div className="auth">
         <section className="auth-brand">
-          <div className="ab-head">
-            <div className="ab-head-link" aria-label="DATAPOT">
-              <div className="ab-mark">
-                <img src={brandSvg} alt="" width={28} height={28} aria-hidden />
-              </div>
-              <div className="ab-head-text">
-                <div className="ab-name">DATAPOT</div>
-                <div className="ab-sub">Schema · API · Port</div>
-              </div>
-            </div>
-          </div>
+          <div className="ab-head" />
 
           <div className="ab-copy">
-            <div className="ab-eyebrow">
-              <span className="dot" />
-              {resolvedEyebrow}
+            <div className="ab-head-link" aria-label="DATAPOT">
+              <div className="ab-mark">
+                <img src={brandSvg} alt="" width={72} height={72} aria-hidden />
+              </div>
+              <div className="ab-name">DATAPOT</div>
             </div>
-            <h1 className="ab-headline">{resolvedHeadline}</h1>
-            <p className="ab-tagline">{resolvedTagline}</p>
           </div>
 
           <div className="ab-foot">
             <div>© 2026 DATAPOT</div>
-            <div className="links">
-              <span>community</span>
-            </div>
           </div>
         </section>
 

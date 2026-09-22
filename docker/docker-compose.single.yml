@@ -7,10 +7,14 @@ services:
     ports:
       - "8080:8080"
       - "9001-9010:9001-9010"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       DPOT_MODE: single
       DPOT_ADMIN_PASSWORD: datapot
       DPOT_DATA_DIR: /data
+      DPOT_DB_TYPE: mongodb
+      DPOT_DB_URL: ${DPOT_DB_URL:?set DPOT_DB_URL to an external MongoDB, for example mongodb://host.docker.internal:27017/datapot}
       DPOT_JWT_SECRET: change-me-in-production
     volumes:
       - dpot-data:/data

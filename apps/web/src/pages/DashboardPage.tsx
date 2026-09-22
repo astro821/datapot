@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { PotDailyCount, PotOverviewDto, PotTrendDto } from '@datapot/shared';
+import {
+  normalizePotFields,
+  type DataPotDto,
+  type PotDailyCount,
+  type PotField,
+  type PotOverviewDto,
+  type PotTrendDto,
+} from '@datapot/shared';
 import { api } from '../lib/api';
+import { PotStatusBadge } from '../components/PotStatusBadge';
 import { useLocale, useT } from '../i18n';
 
 const FAV_KEY = 'dpot.favorites';
@@ -376,15 +384,17 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [menuPotId, setMenuPotId] = useState<string | null>(null);
-  const [trend, setTrend] = useState<{ potId: string; field: string } | null>(null);
-  const [trendData, setTrendData] = useState<{ potId: string; data: PotTrendDto } | null>(null);
-  const [trendError, setTrendError] = useState<string | null>(null);
+  const [charts, setCharts] = useState<
+    Record<string, { field: string; data: PotTrendDto | null; error: string | null }>
+  >({});
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const overview = await api<PotOverviewDto[]>('/datapots/overview');
+      const overview = await api<PotOverviewDto[]>(
+        `/datapots/overview?tzOffsetMinutes=${-new Date().getTimezoneOffset()}`,
+      );
       setItems(overview);
     } catch (e) {
       setError(e instanceof Error ? e.message : '불러오기 실패');
@@ -415,31 +425,98 @@ export function DashboardPage() {
     };
   }, [menuPotId]);
 
+  const trendKey = items
+    .map((pot) => {
+      const field = pot.typeFields?.find((item) => item.trend)?.slug ?? '';
+      return `${pot.id}:${field}`;
+    })
+    .join('|');
+
   useEffect(() => {
-    if (!trend) {
-      setTrendData(null);
-      setTrendError(null);
+    const active = items.flatMap((pot) => {
+      const field = pot.typeFields?.find((item) => item.trend)?.slug;
+      return field ? [{ id: pot.id, field }] : [];
+    });
+    if (active.length === 0) {
+      setCharts({});
       return;
     }
     let cancel = false;
-    setTrendData(null);
-    setTrendError(null);
-    api<PotTrendDto>(
-      `/datapots/${trend.potId}/trend?field=${encodeURIComponent(trend.field)}`,
-    )
-      .then((data) => {
-        if (!cancel) setTrendData({ potId: trend.potId, data });
-      })
-      .catch((err) => {
-        if (!cancel) {
-          setTrendData(null);
-          setTrendError(err instanceof Error ? err.message : t('dashboard.trendNone'));
-        }
-      });
+    setCharts((prev) => {
+      const next: Record<string, { field: string; data: PotTrendDto | null; error: string | null }> =
+        {};
+      for (const item of active) {
+        const existing = prev[item.id];
+        next[item.id] =
+          existing?.field === item.field && existing.data
+            ? existing
+            : { field: item.field, data: null, error: null };
+      }
+      return next;
+    });
+    for (const item of active) {
+      void api<PotTrendDto>(
+        `/datapots/${item.id}/trend?field=${encodeURIComponent(item.field)}&tzOffsetMinutes=${-new Date().getTimezoneOffset()}`,
+      )
+        .then((data) => {
+          if (cancel) return;
+          setCharts((prev) => ({
+            ...prev,
+            [item.id]: { field: item.field, data, error: null },
+          }));
+        })
+        .catch((err) => {
+          if (cancel) return;
+          setCharts((prev) => ({
+            ...prev,
+            [item.id]: {
+              field: item.field,
+              data: null,
+              error: err instanceof Error ? err.message : t('dashboard.trendNone'),
+            },
+          }));
+        });
+    }
     return () => {
       cancel = true;
     };
-  }, [trend, t]);
+  }, [trendKey, items, t]);
+
+  async function chooseTrend(potId: string, slug: string) {
+    const current = items.find((pot) => pot.id === potId);
+    if (current?.typeFields?.find((field) => field.trend)?.slug === slug) {
+      setMenuPotId(null);
+      return;
+    }
+    setMenuPotId(null);
+    setCharts((prev) => ({
+      ...prev,
+      [potId]: { field: slug, data: null, error: null },
+    }));
+    try {
+      const detail = await api<DataPotDto>(`/datapots/${potId}`);
+      const fields = normalizePotFields(
+        (detail.fields ?? []).map((field: PotField) => ({
+          ...field,
+          trend: field.type === 'type' && field.slug === slug,
+        })),
+      );
+      await api<DataPotDto>(`/datapots/${potId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ fields }),
+      });
+      await load();
+    } catch (err) {
+      setCharts((prev) => ({
+        ...prev,
+        [potId]: {
+          field: slug,
+          data: null,
+          error: err instanceof Error ? err.message : t('dashboard.trendNone'),
+        },
+      }));
+    }
+  }
 
   function toggleFavorite(id: string) {
     setFavorites((prev) => {
@@ -511,9 +588,6 @@ export function DashboardPage() {
           <button className="dpot-btn" type="button" onClick={() => void load()} disabled={loading}>
             {loading ? t('dashboard.loading') : t('dashboard.refresh')}
           </button>
-          <Link className="dpot-btn primary" to="/datapots">
-            {t('dashboard.manage')}
-          </Link>
         </div>
       </div>
 
@@ -563,23 +637,22 @@ export function DashboardPage() {
         <div className="dpot-overview-grid">
           {sorted.map((pot) => {
             const fav = favorites.has(pot.id);
-            const trendOn = trend?.potId === pot.id;
-            const trendReady =
-              trendOn &&
-              trendData?.potId === pot.id &&
-              trendData.data.field === trend?.field;
             const typeFields = pot.typeFields ?? [];
-            const activeField = typeFields.find((field) => field.slug === trend?.field);
+            const savedField = typeFields.find((field) => field.trend)?.slug ?? null;
+            const chart = savedField ? charts[pot.id] : undefined;
+            const trendOn = Boolean(savedField);
+            const trendReady = Boolean(chart?.data && chart.field === savedField);
+            const activeField = typeFields.find((field) => field.slug === savedField);
             const fieldLabel = activeField
               ? locale === 'ko'
                 ? activeField.nameKo || activeField.nameEn || activeField.slug
                 : activeField.nameEn || activeField.nameKo || activeField.slug
-              : trend?.field || '';
+              : savedField || '';
             return (
               <div className="dpot-overview-row" key={pot.id}>
               <article
                 className={`dpot-overview-card is-clickable${fav ? ' is-favorite' : ''}${
-                  pot.enabled ? '' : ' is-disabled'
+                  pot.listening ? '' : ' is-disabled'
                 }`}
                 role="link"
                 tabIndex={0}
@@ -598,9 +671,11 @@ export function DashboardPage() {
                     <div className="dpot-overview-card__meta">
                       <code>{pot.key}</code>
                       <span>:{pot.port}</span>
-                      {!pot.enabled ? (
-                        <span className="dpot-overview-card__off">{t('dashboard.inactive')}</span>
-                      ) : null}
+                      <PotStatusBadge
+                        enabled={pot.enabled}
+                        listening={pot.listening}
+                        bindError={pot.bindError}
+                      />
                     </div>
                   </div>
                   <div
@@ -640,17 +715,14 @@ export function DashboardPage() {
                                 key={field.slug}
                                 type="button"
                                 role="menuitemradio"
-                                aria-checked={trendOn && trend?.field === field.slug}
+                                aria-checked={savedField === field.slug}
                                 className={
-                                  trendOn && trend?.field === field.slug
+                                  savedField === field.slug
                                     ? 'dpot-menu__item is-on'
                                     : 'dpot-menu__item'
                                 }
                                 onClick={() => {
-                                  setTrendData(null);
-                                  setTrendError(null);
-                                  setTrend({ potId: pot.id, field: field.slug });
-                                  setMenuPotId(null);
+                                  void chooseTrend(pot.id, field.slug);
                                 }}
                               >
                                 {locale === 'ko'
@@ -686,13 +758,13 @@ export function DashboardPage() {
                 <ContributionHeatmap days={pot.dailyCounts} />
               </article>
               <div className={trendOn ? 'dpot-trend-slot is-active' : 'dpot-trend-slot'}>
-                {trendOn && trendError ? (
-                  <p className="dpot-trend__empty">{trendError}</p>
+                {trendOn && chart?.error && chart.field === savedField ? (
+                  <p className="dpot-trend__empty">{chart.error}</p>
                 ) : null}
-                {trendReady && trendData ? (
-                  <TrendChart data={trendData.data} title={`${pot.name} · ${fieldLabel}`} />
+                {trendReady && chart?.data ? (
+                  <TrendChart data={chart.data} title={`${pot.name} · ${fieldLabel}`} />
                 ) : null}
-                {trendOn && !trendError && !trendReady ? (
+                {trendOn && !(chart?.error && chart.field === savedField) && !trendReady ? (
                   <p className="dpot-trend__empty">{t('dashboard.loading')}</p>
                 ) : null}
               </div>

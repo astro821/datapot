@@ -7,7 +7,14 @@ import React, {
   useState,
 } from 'react';
 import type { SystemStatus, UserDto } from '@datapot/shared';
-import { api, clearSession, getStoredUser, getToken, setSession } from './api';
+import {
+  api,
+  clearSession,
+  getStoredUser,
+  getToken,
+  SESSION_EXPIRED_EVENT,
+  setSession,
+} from './api';
 
 interface AuthState {
   user: UserDto | null;
@@ -23,8 +30,10 @@ interface AuthState {
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<UserDto | null>(getStoredUser<UserDto>());
-  const [token, setToken] = useState<string | null>(getToken());
+  const [token, setToken] = useState<string | null>(getToken);
+  const [user, setUser] = useState<UserDto | null>(() =>
+    getToken() ? getStoredUser<UserDto>() : null,
+  );
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -39,6 +48,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .catch(() => setStatus(null))
       .finally(() => setLoading(false));
   }, [refreshStatus]);
+
+  useEffect(() => {
+    const onExpired = () => {
+      clearSession();
+      setToken(null);
+      setUser(null);
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
+  }, []);
 
   const login = useCallback(
     async (username: string, password: string) => {

@@ -4,6 +4,7 @@ import type { ColDef, ICellRendererParams } from 'ag-grid-community';
 import {
   POT_FIELD_TYPE_LABELS,
   slugifyFieldName,
+  normalizePotFields,
   uniqueSlug,
   type DataPotDto,
   type PotField,
@@ -15,11 +16,12 @@ import { Modal } from '../components/Modal';
 import { Badge } from '../components/Badge';
 import { DataGrid } from '../components/DataGrid';
 import { IconPencil } from '../components/Icons';
+import { PotStatusBadge } from '../components/PotStatusBadge';
 import { notifyNavRefresh } from '../lib/datapots-nav';
 import { useT } from '../i18n';
 
 type FieldMode = 'create' | 'edit' | null;
-type PropKey = 'name' | 'key' | 'port';
+type PropKey = 'name' | 'port';
 
 const FIELD_TYPES: PotFieldType[] = ['number', 'text', 'url', 'date', 'boolean', 'type'];
 
@@ -60,10 +62,10 @@ export function DatapotDetailPage() {
   const [fieldType, setFieldType] = useState<PotFieldType>('text');
   const [required, setRequired] = useState(false);
   const [nullable, setNullable] = useState(false);
+  const [fieldDescription, setFieldDescription] = useState('');
   const [busy, setBusy] = useState(false);
   const [editingProp, setEditingProp] = useState<PropKey | null>(null);
   const [draftName, setDraftName] = useState('');
-  const [draftKey, setDraftKey] = useState('');
   const [draftPort, setDraftPort] = useState(9001);
   const [apiBusy, setApiBusy] = useState(false);
   const [apiMenuOpen, setApiMenuOpen] = useState(false);
@@ -104,20 +106,17 @@ export function DatapotDetailPage() {
   function startEdit(key: PropKey) {
     if (!pot) return;
     setDraftName(pot.name);
-    setDraftKey(pot.key);
     setDraftPort(pot.port);
     setEditingProp(key);
   }
 
   async function savePotPatch(
-    patch: Partial<Pick<DataPotDto, 'name' | 'key' | 'port' | 'enabled'>>,
+    patch: Partial<Pick<DataPotDto, 'name' | 'port' | 'enabled'>>,
   ) {
     if (!id || !pot) return;
     if (savingProp.current) return;
     savingProp.current = true;
-    const deactivatedByEndpoint =
-      (patch.key != null && patch.key !== pot.key) ||
-      (patch.port != null && patch.port !== pot.port);
+    const deactivatedByEndpoint = patch.port != null && patch.port !== pot.port;
     try {
       const updated = await api<DataPotDto>(`/datapots/${id}`, {
         method: 'PATCH',
@@ -126,10 +125,13 @@ export function DatapotDetailPage() {
       setPot(updated);
       setFields(updated.fields ?? []);
       notifyNavRefresh();
-      toast.push(
-        'success',
-        deactivatedByEndpoint ? t('potDetail.deactivated') : t('potDetail.saved'),
-      );
+      if (deactivatedByEndpoint) {
+        toast.push('success', t('potDetail.deactivated'));
+      } else if (updated.enabled && !updated.listening) {
+        toast.push('error', updated.bindError || t('common.bindFailed'));
+      } else {
+        toast.push('success', t('potDetail.saved'));
+      }
     } catch (err) {
       toast.push('error', err instanceof Error ? err.message : t('potDetail.saveFail'));
       await load();
@@ -144,13 +146,6 @@ export function DatapotDetailPage() {
     setEditingProp(null);
     if (!pot || !next || next === pot.name) return;
     await savePotPatch({ name: next });
-  }
-
-  async function commitKey() {
-    const next = draftKey.trim();
-    setEditingProp(null);
-    if (!pot || !next || next === pot.key) return;
-    await savePotPatch({ key: next });
   }
 
   async function commitPort() {
@@ -175,7 +170,11 @@ export function DatapotDetailPage() {
       if (action === 'restart') {
         const updated = await api<DataPotDto>(`/datapots/${id}/restart`, { method: 'POST' });
         setPot(updated);
-        toast.push('success', t('potDetail.restartOk', { port: updated.port }));
+        if (updated.enabled && !updated.listening) {
+          toast.push('error', updated.bindError || t('common.bindFailed'));
+        } else {
+          toast.push('success', t('potDetail.restartOk', { port: updated.port }));
+        }
       } else {
         const enabled = action === 'enable';
         if (pot.enabled === enabled) {
@@ -189,7 +188,11 @@ export function DatapotDetailPage() {
         setPot(updated);
         setFields(updated.fields ?? []);
         notifyNavRefresh();
-        toast.push('success', enabled ? t('potDetail.enabledOk') : t('potDetail.disabledOk'));
+        if (enabled && !updated.listening) {
+          toast.push('error', updated.bindError || t('common.bindFailed'));
+        } else {
+          toast.push('success', enabled ? t('potDetail.enabledOk') : t('potDetail.disabledOk'));
+        }
       }
     } catch (err) {
       toast.push('error', err instanceof Error ? err.message : t('potDetail.actionFail'));
@@ -205,6 +208,7 @@ export function DatapotDetailPage() {
     setFieldType('text');
     setRequired(false);
     setNullable(false);
+    setFieldDescription('');
     setMode('create');
   }
 
@@ -215,6 +219,7 @@ export function DatapotDetailPage() {
     setFieldType(field.type);
     setRequired(field.required);
     setNullable(field.nullable === true);
+    setFieldDescription(field.description ?? '');
     setMode('edit');
   }
 
@@ -230,7 +235,11 @@ export function DatapotDetailPage() {
       setFields(updated.fields ?? []);
       notifyNavRefresh();
       setMode(null);
-      toast.push('success', '필드가 저장되었습니다');
+      if (updated.enabled && !updated.listening) {
+        toast.push('error', updated.bindError || t('common.bindFailed'));
+      } else {
+        toast.push('success', '필드가 저장되었습니다');
+      }
     } catch (err) {
       toast.push('error', err instanceof Error ? err.message : '저장 실패');
     } finally {
@@ -244,6 +253,7 @@ export function DatapotDetailPage() {
       toast.push('error', '영문 필드명을 입력하세요');
       return;
     }
+    const previous = editingSlug ? fields.find((field) => field.slug === editingSlug) : undefined;
     const nextField: PotField = {
       slug: liveSlug,
       nameEn: nameEn.trim(),
@@ -251,6 +261,8 @@ export function DatapotDetailPage() {
       type: fieldType,
       required,
       nullable,
+      description: fieldDescription.trim() || undefined,
+      trend: fieldType === 'type' && previous?.trend === true,
     };
     let next: PotField[];
     if (mode === 'create') {
@@ -260,7 +272,7 @@ export function DatapotDetailPage() {
     } else {
       return;
     }
-    await saveFields(next);
+    await saveFields(normalizePotFields(next));
   }
 
   async function removeField(slug: string) {
@@ -279,6 +291,14 @@ export function DatapotDetailPage() {
       },
       { field: 'nameEn', headerName: '필드명 (영문)', flex: 1, minWidth: 140 },
       { field: 'nameKo', headerName: '필드명 (국문)', flex: 1, minWidth: 120 },
+      {
+        field: 'description',
+        headerName: '설명',
+        flex: 1.4,
+        minWidth: 160,
+        tooltipField: 'description',
+        valueFormatter: (p) => (typeof p.value === 'string' ? p.value : ''),
+      },
       {
         field: 'type',
         headerName: '데이터 타입',
@@ -363,11 +383,11 @@ export function DatapotDetailPage() {
                 </button>
               ) : null}
               {pot ? (
-                pot.enabled ? (
-                  <Badge tone="success">{t('common.active')}</Badge>
-                ) : (
-                  <Badge tone="neutral">{t('common.inactive')}</Badge>
-                )
+                <PotStatusBadge
+                  enabled={pot.enabled}
+                  listening={pot.listening}
+                  bindError={pot.bindError}
+                />
               ) : null}
             </>
           )}
@@ -376,32 +396,7 @@ export function DatapotDetailPage() {
           {pot ? (
             <div className="dpot-head-port">
               <span className="dpot-head-port__label">key</span>
-              {editingProp === 'key' ? (
-                <input
-                  className="dpot-head-port__input dpot-mono"
-                  value={draftKey}
-                  autoFocus
-                  onChange={(e) => setDraftKey(e.target.value)}
-                  onBlur={() => void commitKey()}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                    if (e.key === 'Escape') setEditingProp(null);
-                  }}
-                />
-              ) : (
-                <code>{pot.key}</code>
-              )}
-              {editingProp !== 'key' ? (
-                <button
-                  type="button"
-                  className="dpot-icon-btn"
-                  aria-label="key 수정"
-                  title="key 수정"
-                  onClick={() => startEdit('key')}
-                >
-                  <IconPencil size={14} />
-                </button>
-              ) : null}
+              <code>{pot.key}</code>
             </div>
           ) : null}
           {pot ? (
@@ -532,6 +527,14 @@ export function DatapotDetailPage() {
               value={nameKo}
               onChange={(e) => setNameKo(e.target.value)}
               placeholder="예: 상품명"
+            />
+          </label>
+          <label>
+            설명
+            <input
+              value={fieldDescription}
+              onChange={(e) => setFieldDescription(e.target.value)}
+              placeholder="MCP와 OpenAPI에 보이는 설명"
             />
           </label>
           <label>
