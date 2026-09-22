@@ -50,6 +50,7 @@ export const en = {
     password: 'Password',
     showPassword: 'Show password',
     hidePassword: 'Hide password',
+    remember: 'ID 기억하기',
     submit: 'Sign in',
     submitting: 'Signing in…',
     refresh: 'Refresh',

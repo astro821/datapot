@@ -52,6 +52,7 @@ export const ko: MessageCatalog = {
     password: '비밀번호',
     showPassword: '비밀번호 보기',
     hidePassword: '비밀번호 숨기기',
+    remember: 'ID 기억하기',
     submit: '로그인',
     submitting: '로그인 중…',
     refresh: '새로고침',

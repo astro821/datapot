@@ -89,17 +89,7 @@ export function SetupPage() {
   }
 
   return (
-    <AuthSplitLayout
-      eyebrow="시스템 초기화"
-      headline={
-        <>
-          MongoDB를 연결하고
-          <br />
-          <em>관리 콘솔을 시작하세요</em>
-        </>
-      }
-      tagline="MongoDB URL을 저장합니다. 연결에 성공한 뒤 admin 비밀번호를 확인·재설정합니다."
-    >
+    <AuthSplitLayout>
       <div className="af-head">
         <h1 className="af-title">DBMS 설정</h1>
         <p className="af-sub">MongoDB 연결 URL을 입력합니다.</p>
