@@ -8,6 +8,8 @@ import { DataPotRecord } from '../datapots/datapot.store';
 import { PotRecordStore } from '../datapots/pot-record.store';
 
 const PAGE_SIZE = 50;
+const MAX_HANDLES_PER_POT = 8;
+const HANDLE_TTL_MS = 15 * 60 * 1000;
 
 export interface QueryHandle {
   id: string;
@@ -15,7 +17,7 @@ export interface QueryHandle {
   from: Date;
   to: Date;
   filters: Record<string, string>;
-  afterSeq: number;
+  touchedAt: number;
 }
 
 export function mountPotMcp(
@@ -89,7 +91,7 @@ function createPotMcp(
     'open_query',
     {
       description:
-        '수집 구간과 구분자 값으로 조회 핸들을 연다. from/to는 UTC date-time이다. 지정한 구분자만 필터가 된다.',
+        '수집 구간과 구분자 값으로 조회 핸들을 연다. from/to는 UTC date-time이다. 지정한 구분자만 필터가 된다. 팟마다 핸들은 8개까지이며, 15분 동안 읽지 않으면 닫힌다.',
       inputSchema: {
         from: z.string().describe('UTC 시작 시각'),
         to: z.string().describe('UTC 끝 시각'),
@@ -100,6 +102,10 @@ function createPotMcp(
       },
     },
     async ({ from, to, filters }) => {
+      sweepHandles(handles, pot.id);
+      if (countPotHandles(handles, pot.id) >= MAX_HANDLES_PER_POT) {
+        return text('열린 조회가 너무 많습니다. close_query로 닫아 주세요.', true);
+      }
       const range = parseRange(from, to, true);
       if ('error' in range) return text(range.error, true);
       const allowed = new Set(typeFields.map((field) => field.slug));
@@ -115,34 +121,37 @@ function createPotMcp(
         from: range.from!,
         to: range.to!,
         filters: nextFilters,
-        afterSeq: 0,
+        touchedAt: Date.now(),
       };
       handles.set(handle.id, handle);
-      return text(JSON.stringify({ handle: handle.id }));
+      return text(JSON.stringify({ handle: handle.id, afterSeq: 0 }));
     },
   );
 
   server.registerTool(
     'read_query',
     {
-      description: '열린 조회 핸들의 다음 페이지. 응답은 id, seq, payload, createdAt 이다.',
+      description:
+        '조회 핸들의 한 페이지. 응답의 afterSeq를 다음 호출에 그대로 넘긴다. 응답을 받지 못했으면 이전에 받은 afterSeq로 다시 호출한다.',
       inputSchema: {
         handle: z.string(),
+        afterSeq: z.number().int().nonnegative().optional().describe('이전에 받은 afterSeq. 처음에는 0'),
       },
     },
-    async ({ handle }) => {
+    async ({ handle, afterSeq }) => {
+      sweepHandles(handles, pot.id);
       const open = handles.get(handle);
       if (!open || open.potId !== pot.id) return text('핸들이 없습니다', true);
+      open.touchedAt = Date.now();
+      const cursor = afterSeq ?? 0;
       const rows = await records.queryRecords(pot.id, {
         from: open.from,
         to: open.to,
         filters: open.filters,
-        afterSeq: open.afterSeq,
+        afterSeq: cursor,
         limit: PAGE_SIZE,
       });
       const last = rows[rows.length - 1];
-      if (last) open.afterSeq = last.seq;
-      const done = rows.length < PAGE_SIZE;
       return text(
         JSON.stringify({
           items: rows.map((row) => ({
@@ -151,7 +160,8 @@ function createPotMcp(
             payload: row.payload,
             createdAt: row.createdAt.toISOString(),
           })),
-          done,
+          done: rows.length < PAGE_SIZE,
+          afterSeq: last?.seq ?? cursor,
         }),
       );
     },
@@ -175,6 +185,21 @@ function createPotMcp(
 
 function describeFields(fields: PotField[]): { slug: string; description: string }[] {
   return fields.map((field) => ({ slug: field.slug, description: potFieldDescription(field) }));
+}
+
+function sweepHandles(handles: Map<string, QueryHandle>, potId: string): void {
+  const now = Date.now();
+  for (const [id, handle] of handles) {
+    if (handle.potId === potId && now - handle.touchedAt > HANDLE_TTL_MS) handles.delete(id);
+  }
+}
+
+function countPotHandles(handles: Map<string, QueryHandle>, potId: string): number {
+  let count = 0;
+  for (const handle of handles.values()) {
+    if (handle.potId === potId) count += 1;
+  }
+  return count;
 }
 
 function parseRange(
