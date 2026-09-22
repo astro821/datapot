@@ -1,4 +1,4 @@
-import brandSvg from '../assets/images/brand.svg';
+import brandSvg from '../assets/images/brand-light.svg';
 
 type BrandLogoProps = {
   className?: string;

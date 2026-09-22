@@ -73,15 +73,19 @@ body {
   letter-spacing: 0.04em;
 }
 
+.dpot-sidebar .dpot-logo {
+  gap: 0;
+  font-size: var(--text-20);
+}
+
 .dpot-sidebar .dpot-logo__word {
   color: #fff;
 }
 
 .dpot-sidebar .dpot-logo__mark {
-  background: #fff;
-  border-radius: 8px;
-  padding: 2px;
-  box-sizing: content-box;
+  /* The mark sits in the middle of the square file, so the box is larger than the word. */
+  width: 2.15em;
+  height: 2.15em;
 }
 
 .dpot-nav {
