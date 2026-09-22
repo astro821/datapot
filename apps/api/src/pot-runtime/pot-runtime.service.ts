@@ -1,8 +1,16 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { createHash, timingSafeEqual } from 'crypto';
 import express, { Express, Request, Response } from 'express';
 import { Server } from 'http';
 import Ajv, { ValidateFunction } from 'ajv';
-import { buildOpenApiDocument, buildPotApiPaths, buildPotPublicBase, POT_OAS_PATHS } from '@datapot/shared';
+import {
+  buildOpenApiDocument,
+  buildPotApiPaths,
+  buildPotPublicBase,
+  normalizeTypePayload,
+  parseUtcInstant,
+  POT_OAS_PATHS,
+} from '@datapot/shared';
 import { DataPotStore, DataPotRecord } from '../datapots/datapot.store';
 import { PotRecordStore } from '../datapots/pot-record.store';
 import { BootstrapService } from '../bootstrap/bootstrap.service';
@@ -112,11 +120,23 @@ export class PotRuntimeService implements OnModuleDestroy {
     app.use((_req, res, next) => {
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
       next();
     });
     app.options('*', (_req, res) => {
       res.sendStatus(204);
+    });
+    app.use(async (req, res, next) => {
+      if (req.method === 'OPTIONS' || isPublicPotPath(req.path)) {
+        next();
+        return;
+      }
+      const allowed = await this.allowBearer(pot.id, req.header('authorization'));
+      if (!allowed) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      next();
     });
 
     let validate: ValidateFunction | null = null;
@@ -174,7 +194,11 @@ export class PotRuntimeService implements OnModuleDestroy {
 
     app.post(apiPaths.collection, async (req: Request, res: Response) => {
       try {
-        const body = req.body;
+        const raw =
+          req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+            ? (req.body as Record<string, unknown>)
+            : {};
+        const body = normalizeTypePayload(pot.fields ?? [], raw);
         if (validate && !validate(body)) {
           return res.status(400).json({
             error: 'Schema validation failed',
@@ -189,7 +213,7 @@ export class PotRuntimeService implements OnModuleDestroy {
           id: record.id,
           potId: record.potId,
           seq: record.seq,
-          payload: record.payload,
+          payload: normalizeTypePayload(pot.fields ?? [], record.payload),
           createdAt: record.createdAt.toISOString(),
         });
       } catch (e) {
@@ -198,9 +222,16 @@ export class PotRuntimeService implements OnModuleDestroy {
       }
     });
 
-    app.get(apiPaths.collection, async (_req: Request, res: Response) => {
+    app.get(apiPaths.collection, async (req: Request, res: Response) => {
       try {
-        const rows = await this.records.findByPot(pot.id);
+        const fromRaw = typeof req.query.from === 'string' ? req.query.from : undefined;
+        const toRaw = typeof req.query.to === 'string' ? req.query.to : undefined;
+        const from = fromRaw ? parseUtcInstant(fromRaw) : undefined;
+        const to = toRaw ? parseUtcInstant(toRaw) : undefined;
+        if ((fromRaw && !from) || (toRaw && !to)) {
+          return res.status(400).json({ error: 'from and to must be UTC date-time values' });
+        }
+        const rows = await this.records.findByPot(pot.id, 10_000, { from: from ?? undefined, to: to ?? undefined });
         return res.json(
           rows.map((r) => ({
             id: r.id,
@@ -235,4 +266,25 @@ export class PotRuntimeService implements OnModuleDestroy {
 
     return app;
   }
+
+  private async allowBearer(potId: string, header: string | undefined): Promise<boolean> {
+    const pot = await this.pots.findById(potId);
+    if (!pot?.apiTokenHash || !pot.apiTokenExpiresAt) return false;
+    if (new Date(pot.apiTokenExpiresAt).getTime() <= Date.now()) return false;
+    const match = /^Bearer\s+(\S+)$/i.exec(header ?? '');
+    if (!match) return false;
+    const digest = createHash('sha256').update(match[1]).digest();
+    let stored: Buffer;
+    try {
+      stored = Buffer.from(pot.apiTokenHash, 'hex');
+    } catch {
+      return false;
+    }
+    if (stored.length !== digest.length) return false;
+    return timingSafeEqual(stored, digest);
+  }
+}
+
+function isPublicPotPath(path: string): boolean {
+  return path === '/health' || path === POT_OAS_PATHS.openapi || path === POT_OAS_PATHS.docs;
 }

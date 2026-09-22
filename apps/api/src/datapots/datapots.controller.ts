@@ -11,6 +11,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { createHash, randomBytes } from 'crypto';
 import {
   IsArray,
   IsBoolean,
@@ -44,6 +45,12 @@ import { PotRecordStore, type PotRecord } from './pot-record.store';
 import { PotRuntimeService } from '../pot-runtime/pot-runtime.service';
 import { PotSequenceService } from './pot-sequence.service';
 import { BootstrapService } from '../bootstrap/bootstrap.service';
+
+class IssueTokenDto {
+  @IsOptional()
+  @IsIn([30, 90, 365])
+  days?: number;
+}
 
 class DeleteRecordsDto {
   @IsArray()
@@ -166,7 +173,8 @@ export class DatapotsController {
   }
 
   @Get('overview')
-  async overview() {
+  async overview(@Query('tzOffsetMinutes') tz?: string) {
+    const offset = parseTzOffset(tz);
     const pots = await this.store.findAll();
     const out = [];
     for (const pot of pots) {
@@ -175,7 +183,7 @@ export class DatapotsController {
         this.records.countUnverifiedByPot(pot.id),
         this.records.findEarliestByPot(pot.id),
         this.records.findLatestByPot(pot.id),
-        this.records.dailyCountsByPot(pot.id, 183),
+        this.records.dailyCountsByPot(pot.id, 183, offset),
       ]);
       out.push({
         id: pot.id,
@@ -462,14 +470,35 @@ export class DatapotsController {
     return { ok: true };
   }
 
+  @Post(':id/token')
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  async issueToken(@Param('id') id: string, @Body() body: IssueTokenDto) {
+    const pot = await this.store.findById(id);
+    if (!pot) throw new NotFoundException('DataPot not found');
+    const days = body.days ?? 30;
+    if (days !== 30 && days !== 90 && days !== 365) {
+      throw new BadRequestException('만료일은 30, 90, 365일 중 하나여야 합니다');
+    }
+    const token = randomBytes(32).toString('hex');
+    const hash = createHash('sha256').update(token).digest('hex');
+    const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+    const updated = await this.store.setApiToken(id, hash, expiresAt);
+    if (!updated) throw new NotFoundException('DataPot not found');
+    return { token, expiresAt: expiresAt.toISOString(), days };
+  }
+
   @Get(':id/trend')
-  async trend(@Param('id') id: string, @Query('field') field?: string) {
+  async trend(
+    @Param('id') id: string,
+    @Query('field') field?: string,
+    @Query('tzOffsetMinutes') tz?: string,
+  ) {
     const pot = await this.store.findById(id);
     if (!pot) throw new NotFoundException('DataPot not found');
     const slug = field?.trim() ?? '';
     const typeField = (pot.fields ?? []).find((item) => item.slug === slug && item.type === 'type');
     if (!typeField) throw new BadRequestException('Select a type field');
-    const trend = await this.records.typeTrendByPot(id, typeField.slug, 183);
+    const trend = await this.records.typeTrendByPot(id, typeField.slug, 183, parseTzOffset(tz));
     return { field: typeField.slug, ...trend };
   }
 
@@ -565,6 +594,7 @@ export class DatapotsController {
     enabled: boolean;
     createdAt: Date;
     updatedAt: Date;
+    apiTokenExpiresAt?: Date | null;
   }) {
     const base = buildPotPublicBase({
       potPort: p.port,
@@ -591,8 +621,16 @@ export class DatapotsController {
       },
       createdAt: p.createdAt.toISOString(),
       updatedAt: p.updatedAt.toISOString(),
+      apiTokenExpiresAt: p.apiTokenExpiresAt ? new Date(p.apiTokenExpiresAt).toISOString() : null,
     };
   }
+}
+
+function parseTzOffset(raw: string | undefined): number {
+  if (raw == null || raw.trim() === '') return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-14 * 60, Math.min(14 * 60, Math.trunc(n)));
 }
 
 function parsePageInt(raw: string | undefined, fallback: number): number {

@@ -391,7 +391,9 @@ export function DashboardPage() {
     setLoading(true);
     setError(null);
     try {
-      const overview = await api<PotOverviewDto[]>('/datapots/overview');
+      const overview = await api<PotOverviewDto[]>(
+        `/datapots/overview?tzOffsetMinutes=${-new Date().getTimezoneOffset()}`,
+      );
       setItems(overview);
     } catch (e) {
       setError(e instanceof Error ? e.message : '불러오기 실패');
@@ -453,7 +455,7 @@ export function DashboardPage() {
     });
     for (const item of active) {
       void api<PotTrendDto>(
-        `/datapots/${item.id}/trend?field=${encodeURIComponent(item.field)}`,
+        `/datapots/${item.id}/trend?field=${encodeURIComponent(item.field)}&tzOffsetMinutes=${-new Date().getTimezoneOffset()}`,
       )
         .then((data) => {
           if (cancel) return;
