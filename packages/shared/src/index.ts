@@ -254,31 +254,6 @@ export function isValidPotKey(raw: string): boolean {
   return /^[a-z][a-z0-9_]{0,31}$/.test(raw.trim().toLowerCase());
 }
 
-/**
- * Turn a legacy key into a valid one for collection rename.
- * New keys are rejected instead of rewritten; this is only for existing rows.
- */
-export function migratePotKey(raw: string, taken: ReadonlySet<string>): string {
-  let base = raw
-    .trim()
-    .toLowerCase()
-    .replace(/-/g, '_')
-    .replace(/[^a-z0-9_]+/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_+|_+$/g, '');
-  if (!/^[a-z]/.test(base)) base = `p${base}`;
-  base = base.slice(0, 32).replace(/_+$/g, '');
-  if (!isValidPotKey(base)) base = 'pot';
-  let key = base;
-  let n = 2;
-  while (taken.has(key)) {
-    const suffix = `_${n}`;
-    key = `${base.slice(0, 32 - suffix.length)}${suffix}`;
-    n += 1;
-  }
-  return key;
-}
-
 /** IPv4 (0–255 per octet) */
 export function isValidIPv4(host: string): boolean {
   const parts = host.trim().split('.');
