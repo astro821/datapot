@@ -283,6 +283,66 @@ export class PotRecordStore {
     return [...buckets.entries()].map(([date, count]) => ({ date, count }));
   }
 
+  async queryRecords(
+    potId: string,
+    opts: {
+      from: Date;
+      to: Date;
+      filters: Record<string, string>;
+      afterSeq: number;
+      limit: number;
+    },
+  ): Promise<PotRecord[]> {
+    const col = await this.collection(potId);
+    const filter: Record<string, unknown> = {
+      potId,
+      seq: { $gt: opts.afterSeq },
+      createdAt: { $gte: opts.from, $lte: opts.to },
+    };
+    for (const [slug, value] of Object.entries(opts.filters)) {
+      if (!/^[a-z0-9_]+$/.test(slug) || !value) continue;
+      filter[`payload.${slug}`] = value;
+    }
+    const rows = await col.find(filter).sort({ seq: 1 }).limit(opts.limit).toArray();
+    return rows.map((row) => this.present(row as unknown as PotRecord, potId));
+  }
+
+  async topTypeValues(
+    potId: string,
+    fields: PotField[],
+    range?: { from?: Date; to?: Date },
+  ): Promise<Record<string, { value: string; count: number }[]>> {
+    const typeFields = fields.filter(
+      (field) => field.type === 'type' && /^[a-z0-9_]+$/.test(field.slug),
+    );
+    const col = await this.collection(potId);
+    const filter: Record<string, unknown> = { potId };
+    if (range?.from || range?.to) {
+      const createdAt: Record<string, Date> = {};
+      if (range.from) createdAt.$gte = range.from;
+      if (range.to) createdAt.$lte = range.to;
+      filter.createdAt = createdAt;
+    }
+    const projection: Record<string, 1> = {};
+    for (const field of typeFields) projection[`payload.${field.slug}`] = 1;
+    const rows = await col.find(filter).project(projection).toArray();
+    const out: Record<string, { value: string; count: number }[]> = {};
+    for (const field of typeFields) {
+      const counts = new Map<string, number>();
+      for (const row of rows) {
+        const payload = (row as { payload?: Record<string, unknown> }).payload;
+        for (const value of normalizeTypeValue(payload?.[field.slug])) {
+          counts.set(value, (counts.get(value) ?? 0) + 1);
+        }
+      }
+      out[field.slug] = [...counts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ko'))
+        .slice(0, 10)
+        .map(([value, count]) => ({ value, count }));
+    }
+    return out;
+  }
+
   private async collection(potId: string): Promise<Collection> {
     const key = await this.keyFor(potId);
     return this.db.records(key);

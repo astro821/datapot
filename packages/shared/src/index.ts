@@ -66,10 +66,18 @@ export interface PotField {
   /** When true, JSON null is valid for this field. */
   nullable?: boolean;
   /**
+   * Shown to API clients and MCP tools. Empty falls back to the field name.
+   */
+  description?: string;
+  /**
    * Dashboard trend source. Only one 구분자 (`type`) field per pot may set this.
    * Omitted from the public record payload.
    */
   trend?: boolean;
+}
+
+export function potFieldDescription(field: PotField): string {
+  return field.description?.trim() || field.nameKo || field.nameEn || field.slug;
 }
 
 /** Keep at most one 구분자 field marked as the dashboard trend. */
@@ -366,13 +374,13 @@ export function buildJsonSchemaFromFields(fields: PotField[]): JsonSchema {
     switch (f.type) {
       case 'number':
         properties[key] = withNullable(
-          { type: 'number', description: f.nameKo || f.nameEn },
+          { type: 'number', description: potFieldDescription(f) },
           nullable,
         );
         break;
       case 'text':
         properties[key] = withNullable(
-          { type: 'string', description: f.nameKo || f.nameEn },
+          { type: 'string', description: potFieldDescription(f) },
           nullable,
         );
         break;
@@ -382,7 +390,7 @@ export function buildJsonSchemaFromFields(fields: PotField[]): JsonSchema {
             type: 'string',
             format: 'uri',
             pattern: '^https?:\\/\\/\\S+$',
-            description: f.nameKo || f.nameEn,
+            description: potFieldDescription(f),
           },
           nullable,
         );
@@ -393,14 +401,14 @@ export function buildJsonSchemaFromFields(fields: PotField[]): JsonSchema {
             type: 'string',
             format: 'date',
             pattern: '^\\d{4}-\\d{2}-\\d{2}$',
-            description: f.nameKo || f.nameEn,
+            description: potFieldDescription(f),
           },
           nullable,
         );
         break;
       case 'boolean':
         properties[key] = withNullable(
-          { type: 'boolean', description: f.nameKo || f.nameEn },
+          { type: 'boolean', description: potFieldDescription(f) },
           nullable,
         );
         break;
@@ -409,7 +417,7 @@ export function buildJsonSchemaFromFields(fields: PotField[]): JsonSchema {
           {
             type: 'array',
             items: { type: 'string' },
-            description: f.nameKo || f.nameEn || '구분자',
+            description: potFieldDescription(f) || '구분자',
           },
           nullable,
         );
@@ -607,7 +615,7 @@ function requestSchemaFromResponse(schema: JsonSchema, fields: PotField[]): Json
     const description =
       current && typeof current === 'object' && typeof (current as { description?: string }).description === 'string'
         ? (current as { description: string }).description
-        : field.nameKo || field.nameEn || '구분자';
+        : potFieldDescription(field);
     const nullable =
       current && typeof current === 'object' && (current as { nullable?: boolean }).nullable === true;
     next[field.slug] = {

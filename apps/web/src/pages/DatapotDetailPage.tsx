@@ -61,6 +61,7 @@ export function DatapotDetailPage() {
   const [fieldType, setFieldType] = useState<PotFieldType>('text');
   const [required, setRequired] = useState(false);
   const [nullable, setNullable] = useState(false);
+  const [fieldDescription, setFieldDescription] = useState('');
   const [busy, setBusy] = useState(false);
   const [editingProp, setEditingProp] = useState<PropKey | null>(null);
   const [draftName, setDraftName] = useState('');
@@ -198,6 +199,7 @@ export function DatapotDetailPage() {
     setFieldType('text');
     setRequired(false);
     setNullable(false);
+    setFieldDescription('');
     setMode('create');
   }
 
@@ -208,6 +210,7 @@ export function DatapotDetailPage() {
     setFieldType(field.type);
     setRequired(field.required);
     setNullable(field.nullable === true);
+    setFieldDescription(field.description ?? '');
     setMode('edit');
   }
 
@@ -245,6 +248,7 @@ export function DatapotDetailPage() {
       type: fieldType,
       required,
       nullable,
+      description: fieldDescription.trim() || undefined,
       trend: fieldType === 'type' && previous?.trend === true,
     };
     let next: PotField[];
@@ -557,6 +561,14 @@ export function DatapotDetailPage() {
               value={nameKo}
               onChange={(e) => setNameKo(e.target.value)}
               placeholder="예: 상품명"
+            />
+          </label>
+          <label>
+            설명
+            <input
+              value={fieldDescription}
+              onChange={(e) => setFieldDescription(e.target.value)}
+              placeholder="MCP와 OpenAPI에 보이는 설명"
             />
           </label>
           <label>

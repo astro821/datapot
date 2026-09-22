@@ -14,6 +14,7 @@ import {
 import { DataPotStore, DataPotRecord } from '../datapots/datapot.store';
 import { PotRecordStore } from '../datapots/pot-record.store';
 import { BootstrapService } from '../bootstrap/bootstrap.service';
+import { dropPotHandles, mountPotMcp, type QueryHandle } from './pot-mcp';
 
 function escapeHtml(s: string): string {
   return s
@@ -54,6 +55,7 @@ function swaggerUiHtml(title: string): string {
 export class PotRuntimeService implements OnModuleDestroy {
   private readonly logger = new Logger(PotRuntimeService.name);
   private readonly servers = new Map<string, Server>();
+  private readonly queryHandles = new Map<string, QueryHandle>();
   private readonly ajv = new Ajv({ allErrors: true, coerceTypes: false });
 
   constructor(
@@ -105,6 +107,7 @@ export class PotRuntimeService implements OnModuleDestroy {
       server.close(() => resolve());
     });
     this.servers.delete(id);
+    dropPotHandles(this.queryHandles, id);
   }
 
   async stopAll(): Promise<void> {
@@ -119,7 +122,7 @@ export class PotRuntimeService implements OnModuleDestroy {
     app.use(express.json({ limit: '2mb' }));
     app.use((_req, res, next) => {
       res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
       next();
     });
@@ -191,6 +194,7 @@ export class PotRuntimeService implements OnModuleDestroy {
     });
 
     const apiPaths = buildPotApiPaths(pot.key);
+    mountPotMcp(app, pot, this.records, this.queryHandles);
 
     app.post(apiPaths.collection, async (req: Request, res: Response) => {
       try {
